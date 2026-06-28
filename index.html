@@ -248,6 +248,7 @@
   <h1>Con<b>tour</b></h1>
   <span class="tag">trail telemetry</span>
   <span class="sp"></span>
+  <button id="unitBtn" title="Toggle metric / imperial units">Metric</button>
   <button id="demoBtn">Demo rides</button>
   <button id="clearBtn">Clear all</button>
 </header>
@@ -532,8 +533,32 @@ const COLORS=["#5B5BD6","#0E9F9F","#E8883A","#D6457E","#7C5CD6","#2E8BD6","#5AA6
 const SUBCOLORS=["#5B5BD6","#15A05B","#E8883A","#D6457E","#0E9F9F","#7C5CD6"];
 function fmtTime(s){if(s==null)return"—";s=Math.round(s);const m=Math.floor(s/60),x=s%60;
   return m+":"+String(x).padStart(2,"0");}
-function fmtKmh(v){return v==null?"—":(v*3.6).toFixed(1);}
-function fmtDist(m){return m>=1000?(m/1000).toFixed(2)+" km":Math.round(m)+" m";}
+/* ---------- units (metric / imperial) ---------- */
+let UNITS=lsGet("contour:units")||"metric";
+const M2FT=3.28084, MI_M=1609.344, MS2MPH=2.236936, MS2KMH=3.6;
+function isImp(){return UNITS==="imperial";}
+function speedUnit(){return isImp()?"mph":"km/h";}
+function eleUnit(){return isImp()?"ft":"m";}
+function elevNum(m){return Math.round(isImp()?m*M2FT:m);}      // bare elevation number
+function fmtEle(m){return elevNum(m)+" "+eleUnit();}           // "1234 ft" / "376 m"
+function fmtShort(m){return isImp()?Math.round(m*M2FT)+" ft":Math.round(m)+" m";} // slider tolerances
+function fmtKmh(v){return v==null?"—":(v*(isImp()?MS2MPH:MS2KMH)).toFixed(1);}
+function fmtDist(m){
+  if(isImp()) return m>=MI_M?(m/MI_M).toFixed(2)+" mi":Math.round(m*M2FT)+" ft";
+  return m>=1000?(m/1000).toFixed(2)+" km":Math.round(m)+" m";
+}
+function updateParamLabels(){
+  if($("vRadius"))$("vRadius").textContent=fmtShort(+$("pRadius").value);
+  if($("vLen"))$("vLen").textContent=fmtShort(+$("pLen").value);
+  if($("vRides"))$("vRides").textContent=$("pRides").value;
+}
+function applyUnits(){
+  lsSet("contour:units",UNITS);
+  const b=$("unitBtn"); if(b)b.textContent=isImp()?"Imperial":"Metric";
+  updateParamLabels();
+  renderRides(); drawRides(); drawSegs(); renderSegPane();
+}
+function toggleUnits(){ UNITS=isImp()?"metric":"imperial"; applyUnits(); }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function fmtDur(s){if(s==null)return"—";s=Math.round(s);const h=Math.floor(s/3600),
   m=Math.floor((s%3600)/60),x=s%60;
@@ -617,6 +642,8 @@ function loadLocal(){
 function load(){
   loadLocal();
   const tk=$("ghToken"); if(tk)tk.value=lsGet("contour:token")||"";
+  if($("unitBtn"))$("unitBtn").textContent=isImp()?"Imperial":"Metric";
+  updateParamLabels();
   populateRiderSelect();
   if(RIDES.length){ if(!ORIGIN)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
     renderRides();drawRides();fitAll();$("runBtn").disabled=activeRideCount()<2; }
@@ -845,12 +872,12 @@ function rideStatsHTML(r){
       ${statRow("Distance",fmtDist(s.dist))}
       ${statRow("Elapsed time",s.elapsed!=null?fmtDur(s.elapsed):"—")}
       ${statRow("Moving time",s.moving!=null?fmtDur(s.moving):"—")}
-      ${statRow("Vertical gain","↑ "+Math.round(s.up)+" m")}
-      ${statRow("Vertical loss","↓ "+Math.round(Math.abs(s.down))+" m")}
-      ${statRow("Avg · moving",s.avgMov!=null?fmtKmh(s.avgMov)+" km/h":"—")}
-      ${statRow("Avg · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" km/h":"—")}
-      ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" km/h":"—")}
-      ${statRow("Elevation range",s.eleMin!=null?Math.round(s.eleMin)+"–"+Math.round(s.eleMax)+" m":"—")}
+      ${statRow("Vertical gain","↑ "+fmtEle(s.up))}
+      ${statRow("Vertical loss","↓ "+fmtEle(Math.abs(s.down)))}
+      ${statRow("Avg · moving",s.avgMov!=null?fmtKmh(s.avgMov)+" "+speedUnit():"—")}
+      ${statRow("Avg · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" "+speedUnit():"—")}
+      ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" "+speedUnit():"—")}
+      ${statRow("Elevation range",s.eleMin!=null?elevNum(s.eleMin)+"–"+fmtEle(s.eleMax):"—")}
     </tbody></table></div>`;
 }
 function renderTotals(){
@@ -860,7 +887,7 @@ function renderTotals(){
   RIDES.forEach(r=>{if(!isRiderShown(r.rider||"Me"))return; const s=rideStats(r.raw);dist+=s.dist;up+=s.up;
     if(s.elapsed!=null){time+=s.elapsed;hasT=true;}});
   el.innerHTML=`<div class="tot-row"><span>Total distance</span><b>${fmtDist(dist)}</b></div>
-    <div class="tot-row"><span>Total vertical</span><b>↑${Math.round(up)} m</b></div>
+    <div class="tot-row"><span>Total vertical</span><b>↑${fmtEle(up)}</b></div>
     <div class="tot-row"><span>Total time</span><b>${hasT?fmtDur(time):"—"}</b></div>
     <div class="tot-row"><span>Rides</span><b>${RIDES.length}</b></div>`;
 }
@@ -972,7 +999,7 @@ function renderSegPane(){
     const d=document.createElement("div");d.className="seg"+(i===SEL?" active":"");
     d.innerHTML=`<div class="top"><span class="name">${escapeHtml(s.name)}</span>
       <span class="tag">${s.efforts.length} rides</span></div>
-      <div class="meta"><span>${fmtDist(s.dist)}</span><span>↑${Math.round(s.up)}m</span>
+      <div class="meta"><span>${fmtDist(s.dist)}</span><span>↑${fmtEle(s.up)}</span>
       ${best?`<span class="b">best ${fmtTime(best.time)}</span>`:`<span>untimed</span>`}${subTag}</div>`;
     d.onclick=()=>selectSeg(i);
     el.appendChild(d);
@@ -999,12 +1026,12 @@ function renderRideDetail(el,r){
       ${statRow("Distance",fmtDist(s.dist))}
       ${statRow("Elapsed time",s.elapsed!=null?fmtDur(s.elapsed):"—")}
       ${statRow("Moving time",s.moving!=null?fmtDur(s.moving):"—")}
-      ${statRow("Vertical gain","↑ "+Math.round(s.up)+" m")}
-      ${statRow("Vertical loss","↓ "+Math.round(Math.abs(s.down))+" m")}
-      ${statRow("Avg speed · moving",s.avgMov!=null?fmtKmh(s.avgMov)+" km/h":"—")}
-      ${statRow("Avg speed · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" km/h":"—")}
-      ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" km/h":"—")}
-      ${statRow("Elevation range",s.eleMin!=null?Math.round(s.eleMin)+"–"+Math.round(s.eleMax)+" m":"—")}
+      ${statRow("Vertical gain","↑ "+fmtEle(s.up))}
+      ${statRow("Vertical loss","↓ "+fmtEle(Math.abs(s.down)))}
+      ${statRow("Avg speed · moving",s.avgMov!=null?fmtKmh(s.avgMov)+" "+speedUnit():"—")}
+      ${statRow("Avg speed · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" "+speedUnit():"—")}
+      ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" "+speedUnit():"—")}
+      ${statRow("Elevation range",s.eleMin!=null?elevNum(s.eleMin)+"–"+fmtEle(s.eleMax):"—")}
     </tbody></table>
     <div style="padding:14px"><button class="run-btn" style="margin:0;width:100%" id="backRide">← Back to segments</button></div>
   </div>`;
@@ -1023,7 +1050,7 @@ function leaderboardTable(efforts,timed){
       <span class="lb-name">${escapeHtml(e.name)}</span>
       <span class="lb-time">${fmtTime(e.time)}</span>
       <span class="lb-delta${isBest?" pr":""}">${delta}</span>
-      <span class="lb-speed">${fmtKmh(e.speed)}<i>km/h</i></span>
+      <span class="lb-speed">${fmtKmh(e.speed)}<i>${speedUnit()}</i></span>
     </div>`;
   }).join("");
   return `<div class="lb">${rows}</div>`;
@@ -1046,8 +1073,8 @@ function renderDetail(el,s){
   el.innerHTML=`<div class="detail">
     <div class="hd">
       <input class="title" id="segName" value="${escapeHtml(s.name)}" />
-      <div class="stats"><span>${fmtDist(s.dist)}</span><span>↑${Math.round(s.up)} m</span>
-        <span>↓${Math.round(Math.abs(s.down))} m</span><span>${s.efforts.length} attempts</span></div>
+      <div class="stats"><span>${fmtDist(s.dist)}</span><span>↑${fmtEle(s.up)}</span>
+        <span>↓${fmtEle(Math.abs(s.down))}</span><span>${s.efforts.length} attempts</span></div>
     </div>
     <div class="toolbar">
       <span class="tbtn ${splitMode?"on":""}" id="splitBtn">✂ ${splitMode?"Splitting — click trail":"Split into sub-segments"}</span>
@@ -1135,8 +1162,8 @@ $("demoBtn").onclick=demo;
 $("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGIN=null;
   renderRides();drawRides();drawSegs();renderSegPane();$("runBtn").disabled=true;
   clearStore();toast("Cleared");};
-[["pRadius","vRadius"," m"],["pLen","vLen"," m"],["pRides","vRides",""]].forEach(([p,v,suf])=>{
-  $(p).oninput=()=>$(v).textContent=$(p).value+suf;});
+["pRadius","pLen","pRides"].forEach(p=>{$(p).oninput=updateParamLabels;});
+$("unitBtn").onclick=toggleUnits;
 
 $("saveRepo").onclick=syncToRepo;
 $("saveSegs").onclick=saveSegments;
