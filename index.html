@@ -234,6 +234,36 @@
     body.tab-segs [data-panel="segs"]{display:block}
     .toolbar{position:sticky;top:0;z-index:5}
   }
+
+  /* quick start */
+  header button.icon{padding:8px 12px;font-weight:700}
+  .qs-overlay{position:fixed;inset:0;background:rgba(16,22,42,.45);z-index:9998;
+    display:flex;align-items:center;justify-content:center;padding:20px;
+    opacity:0;pointer-events:none;transition:.2s}
+  .qs-overlay.show{opacity:1;pointer-events:auto}
+  .qs-card{background:var(--panel);border-radius:var(--r);max-width:470px;width:100%;
+    max-height:88vh;overflow-y:auto;box-shadow:var(--sh-2);
+    transform:translateY(8px);transition:.2s}
+  .qs-overlay.show .qs-card{transform:none}
+  .qs-head{display:flex;align-items:center;gap:10px;padding:20px 20px 4px}
+  .qs-head h2{font-family:var(--disp);font-size:19px;font-weight:700;margin:0;flex:1;letter-spacing:-.01em}
+  .qs-head .x{cursor:pointer;color:var(--muted);font-size:18px;line-height:1;
+    padding:4px 8px;border-radius:var(--r-xs);transition:.12s}
+  .qs-head .x:hover{color:var(--ink);background:var(--bg)}
+  .qs-sub{padding:0 20px 6px;color:var(--muted);font-size:13px;line-height:1.55}
+  .qs-steps{list-style:none;margin:0;padding:8px 20px 4px;counter-reset:qs}
+  .qs-steps li{position:relative;padding:11px 0 11px 40px;border-top:1px solid var(--line);
+    font-size:13.5px;line-height:1.5}
+  .qs-steps li:first-child{border-top:none}
+  .qs-steps li::before{counter-increment:qs;content:counter(qs);position:absolute;left:0;top:10px;
+    width:26px;height:26px;border-radius:50%;background:var(--accent-soft);color:var(--accent);
+    font-family:var(--mono);font-weight:600;font-size:13px;
+    display:flex;align-items:center;justify-content:center}
+  .qs-steps b{font-weight:600}
+  .qs-steps code{font-family:var(--mono);font-size:12px;color:var(--accent);
+    background:var(--accent-soft);padding:1px 6px;border-radius:var(--r-xs)}
+  .qs-foot{display:flex;gap:10px;padding:14px 20px 20px}
+  .qs-foot button{flex:1}
 </style>
 </head>
 <body class="tab-map">
@@ -248,6 +278,7 @@
   <h1>Con<b>tour</b></h1>
   <span class="tag">trail telemetry</span>
   <span class="sp"></span>
+  <button id="qsBtn" class="icon" title="Quick start guide" aria-label="Quick start guide">?</button>
   <button id="unitBtn" title="Toggle metric / imperial units">Metric</button>
   <button id="demoBtn">Demo rides</button>
   <button id="clearBtn">Clear all</button>
@@ -318,6 +349,34 @@
     </div>
   </section>
 </main>
+
+<div class="qs-overlay" id="qsOverlay" role="dialog" aria-modal="true" aria-labelledby="qsTitle">
+  <div class="qs-card">
+    <div class="qs-head"><h2 id="qsTitle">Quick start</h2>
+      <span class="x" id="qsClose" title="Close" aria-label="Close">✕</span></div>
+    <div class="qs-sub">Contour finds the trail segments you've ridden more than once and
+      ranks every attempt fastest-first — your own private leaderboard.</div>
+    <ol class="qs-steps">
+      <li><b>Add rides.</b> Drop <code>.gpx</code> files onto the Rides panel (or tap to choose —
+        multiple is fine). No files handy? Hit <b>Demo rides</b> to explore with sample data.</li>
+      <li><b>Detect segments.</b> Tweak <b>Match radius</b>, <b>Min length</b>, and <b>Min rides</b>
+        if you like, then press <code>Detect segments</code>. Any stretch ridden on 2+ rides is
+        matched automatically.</li>
+      <li><b>Explore.</b> Click a segment for its leaderboard, elevation profile, and start/finish
+        pins on the map. Click a ride's name for full ride stats.</li>
+      <li><b>Split (optional).</b> Open a segment, choose <b>Split into sub-segments</b>, and click
+        the highlighted trail to drop cuts — each part gets its own ranking.</li>
+      <li><b>Units.</b> Toggle <b>Metric / Imperial</b> in the top bar anytime.</li>
+      <li><b>Share (optional).</b> Add a GitHub token, pick your rider name, then <b>Save rides</b> /
+        <b>Save segments</b> to sync through the repo. Friends press <b>Reload all</b> to pull
+        everyone's rides.</li>
+    </ol>
+    <div class="qs-foot">
+      <button class="tbtn" id="qsDemo">Load demo rides</button>
+      <button class="tbtn on" id="qsGo">Got it</button>
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -651,6 +710,7 @@ function load(){
   if(SEGS.length){drawSegs();renderSegPane();}
   refreshRiders();
   if(!RIDES.length) loadFromRepo(true);   // fresh device / friend: pull shared data
+  if(!lsGet("contour:qs")) openQuickStart();   // first visit: show the guide
 }
 
 /* ---------- GitHub repo sync ---------- */
@@ -1164,6 +1224,17 @@ $("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGI
   clearStore();toast("Cleared");};
 ["pRadius","pLen","pRides"].forEach(p=>{$(p).oninput=updateParamLabels;});
 $("unitBtn").onclick=toggleUnits;
+
+/* ---------- quick start ---------- */
+function openQuickStart(){ $("qsOverlay").classList.add("show"); }
+function closeQuickStart(){ $("qsOverlay").classList.remove("show"); lsSet("contour:qs","1"); }
+$("qsBtn").onclick=openQuickStart;
+$("qsClose").onclick=closeQuickStart;
+$("qsGo").onclick=closeQuickStart;
+$("qsDemo").onclick=()=>{closeQuickStart();demo();};
+$("qsOverlay").onclick=e=>{ if(e.target===$("qsOverlay")) closeQuickStart(); };
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&$("qsOverlay").classList.contains("show")) closeQuickStart(); });
 
 $("saveRepo").onclick=syncToRepo;
 $("saveSegs").onclick=saveSegments;
