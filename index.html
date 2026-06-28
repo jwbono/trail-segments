@@ -149,6 +149,13 @@
   .ride-stats{padding:2px 0 10px;background:#fff;border-bottom:1px solid var(--line)}
   .ride .rider{font-family:var(--mono);font-size:10px;color:var(--muted);
     background:var(--paper2);padding:1px 6px;border-radius:8px;flex:none}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px 2px}
+  .chip{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:12px;
+    border:1px solid var(--line);color:var(--muted);background:var(--paper);cursor:pointer}
+  .chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  select.tin{-webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%237c8a80'/></svg>");
+    background-repeat:no-repeat;background-position:right 10px center}
   .sync{padding:4px 14px 20px}
   .tin{width:100%;font-family:var(--mono);font-size:12px;padding:8px;border:1px solid var(--line);
     border-radius:3px;background:#fff;color:var(--text);margin-bottom:8px}
@@ -205,6 +212,7 @@
       or tap to choose · multiple ok
       <input type="file" id="file" accept=".gpx" multiple hidden />
     </div>
+    <div id="riderChips" class="chips"></div>
     <div id="rideList"></div>
     <div id="totals" class="totals"></div>
 
@@ -224,7 +232,8 @@
 
     <div class="sec-label">Sync to repo <span class="n">☁</span></div>
     <div class="sync">
-      <input id="riderName" class="tin" placeholder="Rider name (e.g. James)">
+      <select id="riderSelect" class="tin"></select>
+      <input id="riderNew" class="tin" placeholder="New rider name" autocomplete="off" style="display:none">
       <div class="syncbtns">
         <button class="tbtn" id="saveRepo">⇧ Save mine</button>
         <button class="tbtn" id="loadRepo">↻ Reload all</button>
@@ -550,13 +559,13 @@ function loadLocal(){
 }
 function load(){
   loadLocal();
-  const ri=$("riderName"), tk=$("ghToken");
-  if(ri)ri.value=lsGet("contour:rider")||"";
-  if(tk)tk.value=lsGet("contour:token")||"";
+  const tk=$("ghToken"); if(tk)tk.value=lsGet("contour:token")||"";
+  populateRiderSelect();
   if(RIDES.length){ if(!ORIGIN)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
-    renderRides();drawRides();fitAll();$("runBtn").disabled=RIDES.length<2; }
+    renderRides();drawRides();fitAll();$("runBtn").disabled=activeRideCount()<2; }
   else renderRides();
   if(SEGS.length){drawSegs();renderSegPane();}
+  refreshRiders();
   if(!RIDES.length) loadFromRepo(true);   // fresh device / friend: pull shared data
 }
 
@@ -567,7 +576,12 @@ function repoInfo(){
     if(h.endsWith("github.io")){ owner=h.split(".")[0]; if(p[0])repo=p[0]; } }catch(e){}
   return {owner,repo};
 }
-function currentRider(){ const v=($("riderName")&&$("riderName").value)||lsGet("contour:rider")||"Me"; return v.trim()||"Me"; }
+function currentRider(){
+  const sel=$("riderSelect");
+  if(sel){ if(sel.value==="__new__"){const v=(($("riderNew")&&$("riderNew").value)||"").trim();return v||"Me";}
+    return sel.value||"Me"; }
+  return (lsGet("contour:rider")||"Me");
+}
 function getToken(){ return (($("ghToken")&&$("ghToken").value)||lsGet("contour:token")||"").trim(); }
 function setSyncStatus(m){ const e=$("syncStatus"); if(e)e.textContent=m; }
 function b64(str){ return btoa(unescape(encodeURIComponent(str))); }
@@ -610,6 +624,7 @@ async function syncToRepo(){
     await ghPutFile(owner,repo,"data/manifest.json",man,"Update manifest",token,msha);
     setSyncStatus("Saved ✓ "+mine.length+" rides as "+rider);
     toast("Synced to repo");
+    refreshRiders().then(()=>{ const s=$("riderSelect"); if(s){s.value=rider;toggleNewInput();} });
   }catch(e){ setSyncStatus("Error: "+e.message); toast("Sync failed"); }
 }
 async function loadFromRepo(auto){
@@ -622,9 +637,11 @@ async function loadFromRepo(auto){
   }
   if(!loaded){ if(!auto)toast("Repo has no rides"); return; }
   const repoRiders=new Set(man.riders);
+  KNOWN_RIDERS=man.riders.slice();
   RIDES=RIDES.filter(r=>!repoRiders.has(r.rider||"Me")).concat(newRides);
   if(!ORIGIN&&RIDES.length)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
-  renderRides();drawRides();fitAll();$("runBtn").disabled=RIDES.length<2;
+  populateRiderSelect();
+  renderRides();drawRides();fitVisible();$("runBtn").disabled=activeRideCount()<2;
   setSyncStatus("Loaded "+loaded+" rides from repo ("+man.riders.length+" rider"+(man.riders.length>1?"s":"")+")");
   if(!auto)toast("Loaded "+loaded+" rides"); save();
 }
@@ -632,7 +649,54 @@ async function loadFromRepo(auto){
 /* ---------- state + map ---------- */
 let RIDES=[], SEGS=[], SEL=-1, RSEL=-1, splitMode=false;
 let map, rideLayers=[], segLayers=[], splitMarkers=[];
+let KNOWN_RIDERS=[], RIDER_FILTER=null;   // null = show all riders
 const $=id=>document.getElementById(id);
+
+/* ---------- rider filtering ---------- */
+function presentRiders(){return [...new Set(RIDES.map(r=>r.rider||"Me"))];}
+function allKnownRiders(){return [...new Set([...KNOWN_RIDERS,...presentRiders()])].sort();}
+function isRiderShown(name){return RIDER_FILTER===null||RIDER_FILTER.has(name);}
+function activeRideCount(){return RIDES.filter(r=>isRiderShown(r.rider||"Me")).length;}
+function updateRunBtn(){const b=$("runBtn");if(b)b.disabled=activeRideCount()<2;}
+function toggleRider(name){
+  const present=presentRiders();
+  if(RIDER_FILTER===null){RIDER_FILTER=new Set([name]);return;}
+  if(RIDER_FILTER.has(name)){ if(RIDER_FILTER.size===1){RIDER_FILTER=null;return;} RIDER_FILTER.delete(name); }
+  else RIDER_FILTER.add(name);
+  if(present.length&&present.every(r=>RIDER_FILTER.has(r))) RIDER_FILTER=null;
+}
+function fitVisible(){const all=[];RIDES.forEach(r=>{if(isRiderShown(r.rider||"Me"))r.raw.forEach(p=>all.push([p.lat,p.lon]));});
+  if(all.length)map.fitBounds(L.latLngBounds(all).pad(.08));}
+function renderRiderChips(){
+  const el=$("riderChips"); if(!el)return;
+  const present=presentRiders();
+  if(present.length<2){el.innerHTML="";return;}
+  let html=`<span class="chip ${RIDER_FILTER===null?"on":""}" data-r="__all__">All</span>`;
+  present.forEach(r=>{html+=`<span class="chip ${isRiderShown(r)?"on":""}" data-r="${escapeHtml(r)}">${escapeHtml(r)}</span>`;});
+  el.innerHTML=html;
+  el.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
+    const r=c.dataset.r;
+    if(r==="__all__") RIDER_FILTER=null; else toggleRider(r);
+    renderRides();drawRides();fitVisible();
+  });
+}
+function populateRiderSelect(){
+  const sel=$("riderSelect"); if(!sel)return;
+  const cur=lsGet("contour:rider")||"", riders=allKnownRiders();
+  sel.innerHTML=riders.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join("")
+    +`<option value="__new__">+ New rider…</option>`;
+  if(cur&&riders.includes(cur)) sel.value=cur;
+  else if(riders.length) sel.value=riders[0];
+  else sel.value="__new__";
+  toggleNewInput();
+}
+function toggleNewInput(){const sel=$("riderSelect"),nw=$("riderNew");
+  if(sel&&nw) nw.style.display=sel.value==="__new__"?"block":"none";}
+async function refreshRiders(){
+  const man=await fetchJSON("data/manifest.json?t="+Date.now());
+  if(man&&Array.isArray(man.riders)) KNOWN_RIDERS=man.riders.slice();
+  populateRiderSelect();
+}
 
 function initMap(){
   map=L.map("map",{zoomControl:true,tap:true}).setView([38.86,-120.0],12);
@@ -671,8 +735,10 @@ function afterAdd(n){
 }
 function renderRides(){
   $("rideCount").textContent=RIDES.length;
+  renderRiderChips();
   const el=$("rideList"); el.innerHTML="";
   RIDES.forEach((r,i)=>{
+    if(!isRiderShown(r.rider||"Me")) return;
     const dist=spanDist(r.raw,0,r.raw.length-1);
     const d=document.createElement("div"); d.className="ride"+(RSEL===i?" sel":"");
     d.innerHTML=`<span class="sw" style="background:${COLORS[i%COLORS.length]}"></span>
@@ -682,12 +748,13 @@ function renderRides(){
     d.querySelector(".nm").onclick=()=>selectRide(i);
     d.querySelector(".x").onclick=()=>{RIDES.splice(i,1); if(!RIDES.length)ORIGIN=null;
       SEGS=[];SEL=-1;RSEL=-1;splitMode=false;renderRides();drawRides();drawSegs();renderSegPane();fitAll();
-      $("runBtn").disabled=RIDES.length<2; save();};
+      save();};
     el.appendChild(d);
     if(RSEL===i){ const c=document.createElement("div"); c.innerHTML=rideStatsHTML(r);
       el.appendChild(c.firstElementChild); }
   });
   renderTotals();
+  updateRunBtn();
 }
 function rideStatsHTML(r){
   const s=rideStats(r.raw);
@@ -708,7 +775,7 @@ function renderTotals(){
   const el=$("totals"); if(!el)return;
   if(!RIDES.length){el.innerHTML="";return;}
   let dist=0,up=0,time=0,hasT=false;
-  RIDES.forEach(r=>{const s=rideStats(r.raw);dist+=s.dist;up+=s.up;
+  RIDES.forEach(r=>{if(!isRiderShown(r.rider||"Me"))return; const s=rideStats(r.raw);dist+=s.dist;up+=s.up;
     if(s.elapsed!=null){time+=s.elapsed;hasT=true;}});
   el.innerHTML=`<div class="tot-row"><span>Total distance</span><b>${fmtDist(dist)}</b></div>
     <div class="tot-row"><span>Total vertical</span><b>↑${Math.round(up)} m</b></div>
@@ -718,6 +785,7 @@ function renderTotals(){
 function drawRides(){
   rideLayers.forEach(l=>map.removeLayer(l));rideLayers=[];
   RIDES.forEach((r,i)=>{
+    if(!isRiderShown(r.rider||"Me")) return;
     const dim=RSEL>=0&&RSEL!==i;
     const pl=L.polyline(r.raw.map(p=>[p.lat,p.lon]),
       {color:COLORS[i%COLORS.length],weight:RSEL===i?4:2.5,opacity:dim?.2:(RSEL===i?.9:.55)})
@@ -731,10 +799,11 @@ function fitAll(){const all=[];RIDES.forEach(r=>r.raw.forEach(p=>all.push([p.lat
 
 /* ---------- detect ---------- */
 function run(){
-  if(RIDES.length<2)return;
+  const rs=RIDES.filter(r=>isRiderShown(r.rider||"Me"));
+  if(rs.length<2){toast("Need 2+ rides selected");return;}
   $("runBtn").textContent="Detecting…";$("runBtn").disabled=true;
   setTimeout(()=>{
-    try{SEGS=detect(RIDES,{radius:+$("pRadius").value,minLen:+$("pLen").value,minRides:+$("pRides").value});}
+    try{SEGS=detect(rs,{radius:+$("pRadius").value,minLen:+$("pLen").value,minRides:+$("pRides").value});}
     catch(e){toast("Error: "+e.message);SEGS=[];}
     SEL=-1;RSEL=-1;splitMode=false;drawSegs();renderSegPane();
     $("runBtn").textContent="Detect segments";$("runBtn").disabled=false;
@@ -982,7 +1051,9 @@ $("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGI
 
 $("saveRepo").onclick=syncToRepo;
 $("loadRepo").onclick=()=>loadFromRepo(false);
-$("riderName").oninput=()=>lsSet("contour:rider",$("riderName").value.trim());
+$("riderSelect").onchange=()=>{toggleNewInput();
+  if($("riderSelect").value!=="__new__")lsSet("contour:rider",$("riderSelect").value);};
+$("riderNew").oninput=()=>lsSet("contour:rider",$("riderNew").value.trim());
 $("ghToken").oninput=()=>lsSet("contour:token",$("ghToken").value.trim());
 
 load();
