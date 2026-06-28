@@ -1058,7 +1058,10 @@ function renderDetail(el,s){
     ${body}</div>`;
 
   $("segName").oninput=ev=>{s.name=ev.target.value||s.name;};
-  $("segName").onblur=()=>{renderSegPane();drawSegs();save();};
+  $("segName").onblur=()=>{drawSegs();save();
+    // defer re-render: rewriting #segList here removes the input mid-blur
+    // and throws NotFoundError, skipping the save above
+    setTimeout(()=>{if(SEL>=0)renderSegPane();},0);};
   $("splitBtn").onclick=()=>{splitMode=!splitMode;renderDetail(el,s);drawSegs();
     if(splitMode&&isMobile()){setTab("map");toast("Tap the trail to add a cut");}};
   $("backBtn").onclick=()=>{SEL=-1;splitMode=false;drawSegs();renderSegPane();};
