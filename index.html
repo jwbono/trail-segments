@@ -773,8 +773,13 @@ async function loadSegmentsFromRepo(){
 async function syncToRepo(){
   const {owner,repo}=repoInfo(), rider=currentRider(), token=getToken();
   if(!token){ setSyncStatus("Add a GitHub token below to save."); toast("No token set"); return; }
-  const mine=RIDES.filter(r=>(r.rider||"Me")===rider);
-  if(!mine.length){ toast("No rides tagged '"+rider+"'"); return; }
+  // save rides already tagged with this rider, plus any unclaimed local rides
+  // ("Me"/untagged demo or freshly-added rides) — claim those under this name.
+  const mine=RIDES.filter(r=>{const rr=r.rider||"Me"; return rr===rider||rr==="Me";});
+  if(!mine.length){ toast("No rides to save — add rides first"); return; }
+  let claimed=false;
+  mine.forEach(r=>{ if((r.rider||"Me")!==rider){ r.rider=rider; claimed=true; } });
+  if(claimed){ renderRides(); drawRides(); save(); }
   setSyncStatus("Saving "+mine.length+" rides as "+rider+"…");
   try{
     const path="data/rides/"+encodeURIComponent(rider)+".json";
