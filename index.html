@@ -264,6 +264,22 @@
     background:var(--accent-soft);padding:1px 6px;border-radius:var(--r-xs)}
   .qs-foot{display:flex;gap:10px;padding:14px 20px 20px}
   .qs-foot button{flex:1}
+
+  /* ride filters + tags */
+  #rideSearch{margin:8px 16px 2px;width:calc(100% - 32px)}
+  .chip.tagchip{font-family:var(--mono);font-size:11px}
+  .chip.tagchip.on{background:var(--pos);border-color:var(--pos)}
+  .chip-sep{flex-basis:100%;height:0;margin:0;padding:0;border:none}
+  .ride .rtag{font-family:var(--mono);font-size:10px;color:var(--muted);background:var(--bg);
+    padding:2px 6px;border-radius:999px;flex:none;white-space:nowrap}
+  .tag-edit{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:0 14px 12px}
+  .tag-chip{font-family:var(--mono);font-size:11px;color:var(--accent);background:var(--accent-soft);
+    padding:3px 9px;border-radius:999px;display:inline-flex;gap:6px;align-items:center}
+  .tag-chip b{cursor:pointer;color:var(--muted);font-weight:600;font-size:12px;line-height:1}
+  .tag-chip b:hover{color:var(--warm)}
+  .tag-in{font-family:var(--sans);font-size:12px;border:1px dashed var(--line-2);border-radius:999px;
+    padding:3px 11px;width:84px;background:var(--panel);color:var(--ink)}
+  .tag-in:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 </style>
 </head>
 <body class="tab-map">
@@ -298,6 +314,7 @@
       or tap to choose · multiple ok
       <input type="file" id="file" accept=".gpx" multiple hidden />
     </div>
+    <input id="rideSearch" class="tin" placeholder="Search ride names…" autocomplete="off" style="display:none">
     <div id="riderChips" class="chips"></div>
     <div id="rideList"></div>
     <div id="totals" class="totals"></div>
@@ -688,14 +705,14 @@ function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
 let _saveT=null;
 function save(){ clearTimeout(_saveT); _saveT=setTimeout(()=>{
   try{ lsSet("contour:rides",JSON.stringify(RIDES.map(r=>
-    ({name:r.name,rider:r.rider||"",raw:packRaw(r.raw)})))); }catch(e){}
+    ({name:r.name,rider:r.rider||"",tags:r.tags||[],raw:packRaw(r.raw)})))); }catch(e){}
   try{ const sp=JSON.stringify(SEGS.map(packSeg));
     if(sp.length<4500000) lsSet("contour:segs",sp); else lsDel("contour:segs"); }catch(e){}
 },400); }
 function clearStore(){ lsDel("contour:rides"); lsDel("contour:segs"); }
 function loadLocal(){
   try{const r=lsGet("contour:rides");
-    if(r){RIDES=JSON.parse(r).map(o=>({name:o.name,rider:o.rider||"",raw:unpackRaw(o.raw)}));}}catch(e){}
+    if(r){RIDES=JSON.parse(r).map(o=>({name:o.name,rider:o.rider||"",tags:o.tags||[],raw:unpackRaw(o.raw)}));}}catch(e){}
   try{const s=lsGet("contour:segs"); if(s){SEGS=JSON.parse(s).map(unpackSeg);}}catch(e){}
 }
 function load(){
@@ -785,7 +802,7 @@ async function syncToRepo(){
     const path="data/rides/"+encodeURIComponent(rider)+".json";
     const ex=await ghGetFile(owner,repo,path,token);
     await ghPutFile(owner,repo,path,
-      {rider,updated:new Date().toISOString(),rides:mine.map(r=>({name:r.name,raw:packRaw(r.raw)}))},
+      {rider,updated:new Date().toISOString(),rides:mine.map(r=>({name:r.name,tags:r.tags||[],raw:packRaw(r.raw)}))},
       "Update rides for "+rider,token,ex&&ex.sha);
     let man={riders:[]}, msha=null;
     const mx=await ghGetFile(owner,repo,"data/manifest.json",token);
@@ -805,7 +822,7 @@ async function loadFromRepo(auto){
   const newRides=[]; let loaded=0;
   for(const rd of man.riders){
     const f=await fetchJSON("data/rides/"+encodeURIComponent(rd)+".json?t="+Date.now());
-    if(f&&Array.isArray(f.rides)) f.rides.forEach(x=>{ newRides.push({name:x.name,rider:rd,raw:unpackRaw(x.raw)}); loaded++; });
+    if(f&&Array.isArray(f.rides)) f.rides.forEach(x=>{ newRides.push({name:x.name,rider:rd,tags:x.tags||[],raw:unpackRaw(x.raw)}); loaded++; });
   }
   if(!loaded){ if(!auto)toast("Repo has no rides"); return; }
   const repoRiders=new Set(man.riders);
@@ -824,13 +841,37 @@ async function loadFromRepo(auto){
 let RIDES=[], SEGS=[], SEL=-1, RSEL=-1, splitMode=false;
 let map, rideLayers=[], segLayers=[], splitMarkers=[];
 let KNOWN_RIDERS=[], RIDER_FILTER=null;   // null = show all riders
+let TAG_FILTER=null, TEXT_FILTER="";      // null/"" = no tag/text filter
 const $=id=>document.getElementById(id);
 
-/* ---------- rider filtering ---------- */
+/* ---------- ride identity (for de-duplication) ---------- */
+function rideSig(r){
+  const p=r.raw, n=p.length, a=p[0], z=p[n-1];
+  const c=v=>v==null?0:Math.round(v*1e5)/1e5;   // ~1.1 m
+  const d=Math.round(spanDist(p,0,n-1));
+  return [n,c(a.lat),c(a.lon),c(z.lat),c(z.lon),d,a.t||0,z.t||0].join("|");
+}
+
+/* ---------- tags ---------- */
+function normTag(t){return String(t||"").trim().replace(/^#+/,"").replace(/\s+/g," ").toLowerCase().slice(0,24);}
+function presentTags(){return [...new Set(RIDES.flatMap(r=>r.tags||[]))].sort();}
+function addTagToRide(i,val){ const t=normTag(val); if(!t)return;
+  const r=RIDES[i]; r.tags=r.tags||[]; if(!r.tags.includes(t))r.tags.push(t);
+  renderRides();drawRides();save(); }
+function removeTagFromRide(i,t){ const r=RIDES[i]; r.tags=(r.tags||[]).filter(x=>x!==t);
+  renderRides();drawRides();save(); }
+
+/* ---------- rider / tag / text filtering ---------- */
 function presentRiders(){return [...new Set(RIDES.map(r=>r.rider||"Me"))];}
 function allKnownRiders(){return [...new Set([...KNOWN_RIDERS,...presentRiders()])].sort();}
 function isRiderShown(name){return RIDER_FILTER===null||RIDER_FILTER.has(name);}
-function activeRideCount(){return RIDES.filter(r=>isRiderShown(r.rider||"Me")).length;}
+function rideVisible(r){
+  if(!isRiderShown(r.rider||"Me")) return false;
+  if(TAG_FILTER&&TAG_FILTER.size){ const t=r.tags||[]; if(!t.some(x=>TAG_FILTER.has(x))) return false; }
+  if(TEXT_FILTER&&!(r.name||"").toLowerCase().includes(TEXT_FILTER)) return false;
+  return true;
+}
+function activeRideCount(){return RIDES.filter(rideVisible).length;}
 function updateRunBtn(){const b=$("runBtn");if(b)b.disabled=activeRideCount()<2;}
 function toggleRider(name){
   const present=presentRiders();
@@ -839,20 +880,41 @@ function toggleRider(name){
   else RIDER_FILTER.add(name);
   if(present.length&&present.every(r=>RIDER_FILTER.has(r))) RIDER_FILTER=null;
 }
-function fitVisible(){const all=[];RIDES.forEach(r=>{if(isRiderShown(r.rider||"Me"))r.raw.forEach(p=>all.push([p.lat,p.lon]));});
+function toggleTag(t){
+  if(!TAG_FILTER)TAG_FILTER=new Set();
+  if(TAG_FILTER.has(t))TAG_FILTER.delete(t); else TAG_FILTER.add(t);
+  const tags=presentTags();
+  if(!TAG_FILTER.size||(tags.length&&tags.every(x=>TAG_FILTER.has(x))))TAG_FILTER=null;
+}
+function pruneFilters(){   // drop filter entries for riders/tags no longer present
+  if(RIDER_FILTER){ const pr=new Set(presentRiders());
+    [...RIDER_FILTER].forEach(r=>{if(!pr.has(r))RIDER_FILTER.delete(r);}); if(!RIDER_FILTER.size)RIDER_FILTER=null; }
+  if(TAG_FILTER){ const pt=new Set(presentTags());
+    [...TAG_FILTER].forEach(t=>{if(!pt.has(t))TAG_FILTER.delete(t);}); if(!TAG_FILTER.size)TAG_FILTER=null; }
+}
+function fitVisible(){const all=[];RIDES.forEach(r=>{if(rideVisible(r))r.raw.forEach(p=>all.push([p.lat,p.lon]));});
   if(all.length)map.fitBounds(L.latLngBounds(all).pad(.08));}
 function renderRiderChips(){
   const el=$("riderChips"); if(!el)return;
-  const present=presentRiders();
-  if(present.length<2){el.innerHTML="";return;}
-  let html=`<span class="chip ${RIDER_FILTER===null?"on":""}" data-r="__all__">All</span>`;
-  present.forEach(r=>{html+=`<span class="chip ${isRiderShown(r)?"on":""}" data-r="${escapeHtml(r)}">${escapeHtml(r)}</span>`;});
+  const present=presentRiders(), tags=presentTags();
+  let html="";
+  if(present.length>=2){
+    html+=`<span class="chip ${RIDER_FILTER===null?"on":""}" data-r="__all__">All riders</span>`;
+    present.forEach(r=>{html+=`<span class="chip ${isRiderShown(r)?"on":""}" data-r="${escapeHtml(r)}">${escapeHtml(r)}</span>`;});
+  }
+  if(tags.length){
+    if(html)html+=`<span class="chip-sep"></span>`;
+    html+=`<span class="chip tagchip ${(!TAG_FILTER)?"on":""}" data-t="__all__">All tags</span>`;
+    tags.forEach(t=>{const on=TAG_FILTER&&TAG_FILTER.has(t);
+      html+=`<span class="chip tagchip ${on?"on":""}" data-t="${escapeHtml(t)}">#${escapeHtml(t)}</span>`;});
+  }
   el.innerHTML=html;
-  el.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
-    const r=c.dataset.r;
-    if(r==="__all__") RIDER_FILTER=null; else toggleRider(r);
-    renderRides();drawRides();fitVisible();
-  });
+  el.querySelectorAll(".chip[data-r]").forEach(c=>c.onclick=()=>{
+    const r=c.dataset.r; if(r==="__all__")RIDER_FILTER=null; else toggleRider(r);
+    renderRides();drawRides();fitVisible(); });
+  el.querySelectorAll(".chip[data-t]").forEach(c=>c.onclick=()=>{
+    const t=c.dataset.t; if(t==="__all__")TAG_FILTER=null; else toggleTag(t);
+    renderRides();drawRides();fitVisible(); });
 }
 function populateRiderSelect(){
   const sel=$("riderSelect"); if(!sel)return;
@@ -893,31 +955,47 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");
 
 /* ---------- ride add/remove ---------- */
 function addRides(files){
-  let added=0, pend=files.length; if(!pend)return;
+  let pend=files.length; if(!pend)return;
+  const parsed=[];
   [...files].forEach(f=>{const rd=new FileReader();
     rd.onload=()=>{ try{const r=parseGPX(rd.result,f.name.replace(/\.gpx$/i,""));
-        r.rider=currentRider(); RIDES.push(r); added++;}
+        r.rider=currentRider(); r.tags=[]; parsed.push(r);}
       catch(e){toast("Skipped "+f.name+": "+e.message);}
-      if(--pend===0) afterAdd(added); };
+      if(--pend===0) commitParsed(parsed); };
     rd.readAsText(f);});
 }
-function afterAdd(n){
+function commitParsed(parsed){
+  const seen=new Set(RIDES.map(rideSig));   // existing rides + within-batch
+  let added=0, dups=0;
+  parsed.forEach(r=>{ const sig=rideSig(r);
+    if(seen.has(sig)){ dups++; return; }
+    seen.add(sig); RIDES.push(r); added++; });
+  afterAdd(added,dups);
+}
+function afterAdd(n,dups){
   if(!ORIGIN&&RIDES.length) setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
   renderRides();drawRides();fitAll();
-  $("runBtn").disabled=RIDES.length<2;
-  if(n)toast(n+" ride"+(n>1?"s":"")+" loaded"); save();
+  updateRunBtn();
+  const parts=[]; if(n)parts.push(n+" ride"+(n>1?"s":"")+" loaded");
+  if(dups)parts.push(dups+" duplicate"+(dups>1?"s":"")+" skipped");
+  if(parts.length)toast(parts.join(" · ")); save();
 }
 function renderRides(){
+  pruneFilters();
   $("rideCount").textContent=RIDES.length;
+  const sb=$("rideSearch"); if(sb)sb.style.display=RIDES.length?"block":"none";
   renderRiderChips();
   const el=$("rideList"); el.innerHTML="";
+  let shown=0;
   RIDES.forEach((r,i)=>{
-    if(!isRiderShown(r.rider||"Me")) return;
+    if(!rideVisible(r)) return;
+    shown++;
     const dist=spanDist(r.raw,0,r.raw.length-1);
+    const tags=(r.tags||[]).map(t=>`<span class="rtag">#${escapeHtml(t)}</span>`).join("");
     const d=document.createElement("div"); d.className="ride"+(RSEL===i?" sel":"");
     d.innerHTML=`<span class="sw" style="background:${COLORS[i%COLORS.length]}"></span>
       <span class="nm" title="view stats">${escapeHtml(r.name)}</span>
-      ${r.rider?`<span class="rider">${escapeHtml(r.rider)}</span>`:""}
+      ${r.rider?`<span class="rider">${escapeHtml(r.rider)}</span>`:""}${tags}
       <span class="mi">${fmtDist(dist)}</span><span class="x" title="remove">✕</span>`;
     d.querySelector(".nm").onclick=()=>selectRide(i);
     d.querySelector(".x").onclick=()=>{RIDES.splice(i,1); if(!RIDES.length)ORIGIN=null;
@@ -925,8 +1003,13 @@ function renderRides(){
       save();};
     el.appendChild(d);
     if(RSEL===i){ const c=document.createElement("div"); c.innerHTML=rideStatsHTML(r);
-      el.appendChild(c.firstElementChild); }
+      const node=c.firstElementChild; el.appendChild(node);
+      const ti=node.querySelector(".tag-in");
+      if(ti)ti.onkeydown=ev=>{ if(ev.key==="Enter"){ev.preventDefault(); addTagToRide(i,ti.value);} };
+      node.querySelectorAll(".tag-chip b[data-rm]").forEach(b=>b.onclick=()=>removeTagFromRide(i,b.dataset.rm)); }
   });
+  if(RIDES.length&&!shown){ const e=document.createElement("div"); e.className="empty";
+    e.innerHTML="No rides match the current filters."; el.appendChild(e); }
   renderTotals();
   updateRunBtn();
 }
@@ -943,23 +1026,28 @@ function rideStatsHTML(r){
       ${statRow("Avg · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" "+speedUnit():"—")}
       ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" "+speedUnit():"—")}
       ${statRow("Elevation range",s.eleMin!=null?elevNum(s.eleMin)+"–"+fmtEle(s.eleMax):"—")}
-    </tbody></table></div>`;
+    </tbody></table>
+    <div class="tag-edit">
+      ${(r.tags||[]).map(t=>`<span class="tag-chip">#${escapeHtml(t)}<b data-rm="${escapeHtml(t)}" title="remove tag">✕</b></span>`).join("")}
+      <input class="tag-in" placeholder="+ tag" maxlength="24" autocomplete="off" />
+    </div></div>`;
 }
 function renderTotals(){
   const el=$("totals"); if(!el)return;
   if(!RIDES.length){el.innerHTML="";return;}
-  let dist=0,up=0,time=0,hasT=false;
-  RIDES.forEach(r=>{if(!isRiderShown(r.rider||"Me"))return; const s=rideStats(r.raw);dist+=s.dist;up+=s.up;
+  let dist=0,up=0,time=0,hasT=false,n=0;
+  RIDES.forEach(r=>{if(!rideVisible(r))return; n++; const s=rideStats(r.raw);dist+=s.dist;up+=s.up;
     if(s.elapsed!=null){time+=s.elapsed;hasT=true;}});
+  const filtered=n!==RIDES.length;
   el.innerHTML=`<div class="tot-row"><span>Total distance</span><b>${fmtDist(dist)}</b></div>
     <div class="tot-row"><span>Total vertical</span><b>↑${fmtEle(up)}</b></div>
     <div class="tot-row"><span>Total time</span><b>${hasT?fmtDur(time):"—"}</b></div>
-    <div class="tot-row"><span>Rides</span><b>${RIDES.length}</b></div>`;
+    <div class="tot-row"><span>Rides</span><b>${filtered?n+" / "+RIDES.length:RIDES.length}</b></div>`;
 }
 function drawRides(){
   rideLayers.forEach(l=>map.removeLayer(l));rideLayers=[];
   RIDES.forEach((r,i)=>{
-    if(!isRiderShown(r.rider||"Me")) return;
+    if(!rideVisible(r)) return;
     const dim=RSEL>=0&&RSEL!==i;
     const pl=L.polyline(r.raw.map(p=>[p.lat,p.lon]),
       {color:COLORS[i%COLORS.length],weight:RSEL===i?4:2.5,opacity:dim?.2:(RSEL===i?.9:.55)})
@@ -973,7 +1061,7 @@ function fitAll(){const all=[];RIDES.forEach(r=>r.raw.forEach(p=>all.push([p.lat
 
 /* ---------- detect ---------- */
 function run(){
-  const rs=RIDES.filter(r=>isRiderShown(r.rider||"Me"));
+  const rs=RIDES.filter(rideVisible);
   if(rs.length<2){toast("Need 2+ rides selected");return;}
   $("runBtn").textContent="Detecting…";$("runBtn").disabled=true;
   setTimeout(()=>{
@@ -1194,9 +1282,9 @@ function demo(){
         const sp=(3.2+1.6*Math.sin(i*0.3))*paceMul; clock+=Math.max(800,(d/sp)*1000);}
       return {lat:p[0]+jx,lon:p[1]+jy,ele:p[2]+Math.sin(i+seedJitter)*1.5,t:Math.round(clock)};});
   }
-  RIDES=[{name:"Tahoe loop · Jun 1",raw:build(1,1.00,0)},
-    {name:"Corral lap · Jun 4",raw:build(2,0.82,1)},
-    {name:"Evening spin · Jun 9",raw:build(3,1.18,2)}];
+  RIDES=[{name:"Tahoe loop · Jun 1",tags:["training"],raw:build(1,1.00,0)},
+    {name:"Corral lap · Jun 4",tags:["race"],raw:build(2,0.82,1)},
+    {name:"Evening spin · Jun 9",tags:["training","evening"],raw:build(3,1.18,2)}];
   ORIGIN=null;setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
   SEGS=[];SEL=-1;RSEL=-1;splitMode=false;renderRides();drawRides();drawSegs();renderSegPane();fitAll();
   $("runBtn").disabled=false; toast("3 demo rides loaded — hit Detect"); save();
@@ -1219,6 +1307,7 @@ window.addEventListener("orientationchange",()=>{setTimeout(()=>map&&map.invalid
 initMap();
 $("file").onchange=e=>addRides(e.target.files);
 $("drop").onclick=()=>$("file").click();
+$("rideSearch").oninput=()=>{TEXT_FILTER=$("rideSearch").value.trim().toLowerCase();renderRides();drawRides();};
 ["dragover","dragenter"].forEach(ev=>$("drop").addEventListener(ev,e=>{e.preventDefault();$("drop").classList.add("over");}));
 ["dragleave","drop"].forEach(ev=>$("drop").addEventListener(ev,e=>{e.preventDefault();$("drop").classList.remove("over");}));
 $("drop").addEventListener("drop",e=>addRides(e.dataTransfer.files));
