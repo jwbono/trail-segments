@@ -147,6 +147,15 @@
   .se-mk.fin{background:#d12e2e}
   .ride.sel{background:#fff;box-shadow:inset 3px 0 0 var(--signal)}
   .ride-stats{padding:2px 0 10px;background:#fff;border-bottom:1px solid var(--line)}
+  .ride .rider{font-family:var(--mono);font-size:10px;color:var(--muted);
+    background:var(--paper2);padding:1px 6px;border-radius:8px;flex:none}
+  .sync{padding:4px 14px 20px}
+  .tin{width:100%;font-family:var(--mono);font-size:12px;padding:8px;border:1px solid var(--line);
+    border-radius:3px;background:#fff;color:var(--text);margin-bottom:8px}
+  .syncbtns{display:flex;gap:8px;margin-bottom:6px}
+  .syncbtns .tbtn{flex:1;text-align:center}
+  .tokwrap summary{font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer;padding:4px 0}
+  .hint{font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.5;margin-top:4px}
 
   @media (max-width:900px){
     .tabs{display:flex}
@@ -212,6 +221,20 @@
         <span class="val" id="vRides">2</span></div>
     </div>
     <button class="run-btn" id="runBtn" disabled>Detect segments</button>
+
+    <div class="sec-label">Sync to repo <span class="n">☁</span></div>
+    <div class="sync">
+      <input id="riderName" class="tin" placeholder="Rider name (e.g. James)">
+      <div class="syncbtns">
+        <button class="tbtn" id="saveRepo">⇧ Save mine</button>
+        <button class="tbtn" id="loadRepo">↻ Reload all</button>
+      </div>
+      <details class="tokwrap"><summary>GitHub token (needed to save)</summary>
+        <input id="ghToken" class="tin" type="password" placeholder="github_pat_…" autocomplete="off">
+        <div class="hint">Saved only in this browser — never written to the repo. Use a fine-grained token scoped to this repo with Contents: read/write. Rides synced here are public.</div>
+      </details>
+      <div id="syncStatus" class="hint"></div>
+    </div>
   </section>
 
   <div id="map" data-panel="map"></div>
@@ -508,31 +531,102 @@ function unpackSeg(o){return {name:o.name,dist:o.dist,up:o.up,down:o.down,timed:
   splits:o.splits||[],subNames:o.subNames||{},geom:unpackRaw(o.geom),
   efforts:o.efforts.map(e=>({...e,pts:unpackRaw(e.pts)}))};}
 
+/* local cache: localStorage (works on GitHub Pages; no-ops where blocked) */
+function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
 let _saveT=null;
-function save(){ if(!window.storage) return;
-  clearTimeout(_saveT);
-  _saveT=setTimeout(async()=>{
-    try{ await window.storage.set("contour:rides",
-      JSON.stringify(RIDES.map(r=>({name:r.name,raw:packRaw(r.raw)}))), false); }catch(e){}
-    try{ const sp=JSON.stringify(SEGS.map(packSeg));
-      if(sp.length<4500000){ await window.storage.set("contour:segs",sp,false); }
-      else { try{await window.storage.delete("contour:segs",false);}catch(e){}
-        toast("Segments too large to save"); }
-    }catch(e){}
-  },400);
+function save(){ clearTimeout(_saveT); _saveT=setTimeout(()=>{
+  try{ lsSet("contour:rides",JSON.stringify(RIDES.map(r=>
+    ({name:r.name,rider:r.rider||"",raw:packRaw(r.raw)})))); }catch(e){}
+  try{ const sp=JSON.stringify(SEGS.map(packSeg));
+    if(sp.length<4500000) lsSet("contour:segs",sp); else lsDel("contour:segs"); }catch(e){}
+},400); }
+function clearStore(){ lsDel("contour:rides"); lsDel("contour:segs"); }
+function loadLocal(){
+  try{const r=lsGet("contour:rides");
+    if(r){RIDES=JSON.parse(r).map(o=>({name:o.name,rider:o.rider||"",raw:unpackRaw(o.raw)}));}}catch(e){}
+  try{const s=lsGet("contour:segs"); if(s){SEGS=JSON.parse(s).map(unpackSeg);}}catch(e){}
 }
-async function clearStore(){ if(!window.storage)return;
-  try{await window.storage.delete("contour:rides",false);}catch(e){}
-  try{await window.storage.delete("contour:segs",false);}catch(e){}
+function load(){
+  loadLocal();
+  const ri=$("riderName"), tk=$("ghToken");
+  if(ri)ri.value=lsGet("contour:rider")||"";
+  if(tk)tk.value=lsGet("contour:token")||"";
+  if(RIDES.length){ if(!ORIGIN)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
+    renderRides();drawRides();fitAll();$("runBtn").disabled=RIDES.length<2; }
+  else renderRides();
+  if(SEGS.length){drawSegs();renderSegPane();}
+  if(!RIDES.length) loadFromRepo(true);   // fresh device / friend: pull shared data
 }
-async function load(){ if(!window.storage)return;
-  try{const r=await window.storage.get("contour:rides",false);
-    if(r&&r.value){RIDES=JSON.parse(r.value).map(o=>({name:o.name,raw:unpackRaw(o.raw)}));}}catch(e){}
-  try{const s=await window.storage.get("contour:segs",false);
-    if(s&&s.value){SEGS=JSON.parse(s.value).map(unpackSeg);}}catch(e){}
-  if(RIDES.length){setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
-    renderRides();drawRides();fitAll();$("runBtn").disabled=RIDES.length<2;}
-  if(SEGS.length){drawSegs();renderSegPane();toast("Restored "+RIDES.length+" rides");}
+
+/* ---------- GitHub repo sync ---------- */
+function repoInfo(){
+  let owner="jwbono", repo="trail-segments";
+  try{ const h=location.hostname, p=location.pathname.split("/").filter(Boolean);
+    if(h.endsWith("github.io")){ owner=h.split(".")[0]; if(p[0])repo=p[0]; } }catch(e){}
+  return {owner,repo};
+}
+function currentRider(){ const v=($("riderName")&&$("riderName").value)||lsGet("contour:rider")||"Me"; return v.trim()||"Me"; }
+function getToken(){ return (($("ghToken")&&$("ghToken").value)||lsGet("contour:token")||"").trim(); }
+function setSyncStatus(m){ const e=$("syncStatus"); if(e)e.textContent=m; }
+function b64(str){ return btoa(unescape(encodeURIComponent(str))); }
+function unb64(b){ return decodeURIComponent(escape(atob(String(b).replace(/\n/g,"")))); }
+function ghHeaders(token){ return {Authorization:"Bearer "+token,
+  Accept:"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"}; }
+async function fetchJSON(u){ try{const r=await fetch(u,{cache:"no-store"});
+  if(!r.ok)return null; return await r.json();}catch(e){return null;} }
+async function ghGetFile(o,repo,path,token){
+  const r=await fetch(`https://api.github.com/repos/${o}/${repo}/contents/${path}?ref=main`,{headers:ghHeaders(token)});
+  if(r.status===404)return null;
+  if(!r.ok)throw new Error("GET "+r.status); return await r.json();
+}
+async function ghPutFile(o,repo,path,obj,msg,token,sha){
+  const body={message:msg,content:b64(JSON.stringify(obj)),branch:"main"};
+  if(sha)body.sha=sha;
+  const r=await fetch(`https://api.github.com/repos/${o}/${repo}/contents/${path}`,
+    {method:"PUT",headers:ghHeaders(token),body:JSON.stringify(body)});
+  if(!r.ok){const t=await r.text();throw new Error(r.status+" "+t.slice(0,140));}
+  return await r.json();
+}
+async function syncToRepo(){
+  const {owner,repo}=repoInfo(), rider=currentRider(), token=getToken();
+  if(!token){ setSyncStatus("Add a GitHub token below to save."); toast("No token set"); return; }
+  const mine=RIDES.filter(r=>(r.rider||"Me")===rider);
+  if(!mine.length){ toast("No rides tagged '"+rider+"'"); return; }
+  setSyncStatus("Saving "+mine.length+" rides as "+rider+"…");
+  try{
+    const path="data/rides/"+encodeURIComponent(rider)+".json";
+    const ex=await ghGetFile(owner,repo,path,token);
+    await ghPutFile(owner,repo,path,
+      {rider,updated:new Date().toISOString(),rides:mine.map(r=>({name:r.name,raw:packRaw(r.raw)}))},
+      "Update rides for "+rider,token,ex&&ex.sha);
+    let man={riders:[]}, msha=null;
+    const mx=await ghGetFile(owner,repo,"data/manifest.json",token);
+    if(mx){ msha=mx.sha; try{man=JSON.parse(unb64(mx.content));}catch(e){} }
+    if(!Array.isArray(man.riders))man.riders=[];
+    if(!man.riders.includes(rider))man.riders.push(rider);
+    man.updated=new Date().toISOString();
+    await ghPutFile(owner,repo,"data/manifest.json",man,"Update manifest",token,msha);
+    setSyncStatus("Saved ✓ "+mine.length+" rides as "+rider);
+    toast("Synced to repo");
+  }catch(e){ setSyncStatus("Error: "+e.message); toast("Sync failed"); }
+}
+async function loadFromRepo(auto){
+  const man=await fetchJSON("data/manifest.json?t="+Date.now());
+  if(!man||!Array.isArray(man.riders)||!man.riders.length){ if(!auto)toast("No shared rides in repo yet"); return; }
+  const newRides=[]; let loaded=0;
+  for(const rd of man.riders){
+    const f=await fetchJSON("data/rides/"+encodeURIComponent(rd)+".json?t="+Date.now());
+    if(f&&Array.isArray(f.rides)) f.rides.forEach(x=>{ newRides.push({name:x.name,rider:rd,raw:unpackRaw(x.raw)}); loaded++; });
+  }
+  if(!loaded){ if(!auto)toast("Repo has no rides"); return; }
+  const repoRiders=new Set(man.riders);
+  RIDES=RIDES.filter(r=>!repoRiders.has(r.rider||"Me")).concat(newRides);
+  if(!ORIGIN&&RIDES.length)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
+  renderRides();drawRides();fitAll();$("runBtn").disabled=RIDES.length<2;
+  setSyncStatus("Loaded "+loaded+" rides from repo ("+man.riders.length+" rider"+(man.riders.length>1?"s":"")+")");
+  if(!auto)toast("Loaded "+loaded+" rides"); save();
 }
 
 /* ---------- state + map ---------- */
@@ -563,7 +657,8 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");
 function addRides(files){
   let added=0, pend=files.length; if(!pend)return;
   [...files].forEach(f=>{const rd=new FileReader();
-    rd.onload=()=>{ try{RIDES.push(parseGPX(rd.result,f.name.replace(/\.gpx$/i,"")));added++;}
+    rd.onload=()=>{ try{const r=parseGPX(rd.result,f.name.replace(/\.gpx$/i,""));
+        r.rider=currentRider(); RIDES.push(r); added++;}
       catch(e){toast("Skipped "+f.name+": "+e.message);}
       if(--pend===0) afterAdd(added); };
     rd.readAsText(f);});
@@ -582,6 +677,7 @@ function renderRides(){
     const d=document.createElement("div"); d.className="ride"+(RSEL===i?" sel":"");
     d.innerHTML=`<span class="sw" style="background:${COLORS[i%COLORS.length]}"></span>
       <span class="nm" title="view stats">${escapeHtml(r.name)}</span>
+      ${r.rider?`<span class="rider">${escapeHtml(r.rider)}</span>`:""}
       <span class="mi">${fmtDist(dist)}</span><span class="x" title="remove">✕</span>`;
     d.querySelector(".nm").onclick=()=>selectRide(i);
     d.querySelector(".x").onclick=()=>{RIDES.splice(i,1); if(!RIDES.length)ORIGIN=null;
@@ -883,6 +979,11 @@ $("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGI
   clearStore();toast("Cleared");};
 [["pRadius","vRadius"," m"],["pLen","vLen"," m"],["pRides","vRides",""]].forEach(([p,v,suf])=>{
   $(p).oninput=()=>$(v).textContent=$(p).value+suf;});
+
+$("saveRepo").onclick=syncToRepo;
+$("loadRepo").onclick=()=>loadFromRepo(false);
+$("riderName").oninput=()=>lsSet("contour:rider",$("riderName").value.trim());
+$("ghToken").oninput=()=>lsSet("contour:token",$("ghToken").value.trim());
 
 load();
 </script>
