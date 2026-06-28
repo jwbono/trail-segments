@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Contour — Trail Segment Analyzer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root{
+    --ink:#16201b; --ink2:#1f2c25; --paper:#f6f3ea; --paper2:#ece7d8;
+    --line:#cdc6b2; --muted:#7c8a80; --text:#222b25;
+    --signal:#ff4d2e; --best:#138a5e; --best2:#1fb37b;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:var(--sans);color:var(--text);background:var(--ink);
+    display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+  header{background:var(--ink);color:var(--paper);padding:10px 16px;
+    display:flex;align-items:center;gap:16px;border-bottom:1px solid #000;
+    position:relative;overflow:hidden;flex:none}
+  header .contours{position:absolute;inset:0;opacity:.14;pointer-events:none}
+  header h1{font-size:15px;letter-spacing:.18em;text-transform:uppercase;margin:0;
+    font-weight:700;z-index:1}
+  header h1 b{color:var(--signal)}
+  header .sub{font-family:var(--mono);font-size:11px;color:#9fb0a4;z-index:1}
+  header .spacer{flex:1}
+  header button{font-family:var(--mono);font-size:11px;letter-spacing:.05em;
+    background:transparent;color:var(--paper);border:1px solid #41524a;
+    padding:6px 11px;border-radius:2px;cursor:pointer;z-index:1}
+  header button:hover{border-color:var(--signal);color:var(--signal)}
+
+  .tabs{display:none;background:var(--ink);border-bottom:1px solid #000;flex:none}
+  .tabs button{flex:1;background:transparent;color:#9fb0a4;border:none;
+    border-bottom:2px solid transparent;padding:12px 0;font-family:var(--mono);
+    font-size:12px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+  .tabs button.active{color:var(--paper);border-bottom-color:var(--signal)}
+
+  main{flex:1;display:grid;grid-template-columns:300px 1fr 340px;grid-template-rows:1fr;min-height:0}
+  .panel{background:var(--paper);overflow-y:auto;border-right:1px solid var(--line)}
+  .panel:last-child{border-right:none;border-left:1px solid var(--line)}
+  #map{height:100%;min-height:320px;background:var(--paper2)}
+
+  .sec-label{font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--muted);padding:14px 14px 6px;
+    display:flex;justify-content:space-between;align-items:baseline}
+  .sec-label .n{color:var(--signal);font-weight:700}
+
+  .drop{margin:8px 14px;border:1.5px dashed var(--line);border-radius:4px;
+    padding:22px 12px;text-align:center;color:var(--muted);font-size:13px;
+    cursor:pointer;transition:.15s;background:var(--paper)}
+  .drop:hover,.drop.over{border-color:var(--signal);color:var(--signal);background:#fff}
+  .drop b{display:block;color:var(--text);font-size:13px;margin-bottom:3px}
+  .drop.over b{color:var(--signal)}
+
+  .ride{display:flex;align-items:center;gap:9px;padding:7px 14px;font-size:13px;
+    border-top:1px solid var(--paper2)}
+  .ride .sw{width:12px;height:3px;border-radius:2px;flex:none}
+  .ride .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+  .ride .nm:hover{color:var(--signal)}
+  .totals{margin:2px 14px 14px;padding:8px 0;border-top:1px solid var(--line)}
+  .tot-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;color:var(--muted)}
+  .tot-row b{font-family:var(--mono);color:var(--text);font-weight:600}
+  .ride .mi{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .ride .x{color:var(--muted);cursor:pointer;font-size:14px;padding:0 2px}
+  .ride .x:hover{color:var(--signal)}
+
+  .params{padding:6px 14px 16px}
+  .param{display:flex;align-items:center;gap:8px;margin:9px 0;font-size:12px}
+  .param label{flex:1;color:var(--text)}
+  .param input[type=range]{flex:1;accent-color:var(--signal)}
+  .param .val{font-family:var(--mono);font-size:11px;color:var(--signal);
+    width:48px;text-align:right}
+  .run-btn{width:calc(100% - 28px);margin:4px 14px 0;padding:9px;
+    font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+    background:var(--ink);color:var(--paper);border:none;border-radius:3px;cursor:pointer}
+  .run-btn:hover{background:var(--signal)}
+  .run-btn:disabled{opacity:.4;cursor:default}
+
+  .seg{padding:11px 14px;border-top:1px solid var(--paper2);cursor:pointer;transition:.12s}
+  .seg:hover{background:#fff}
+  .seg.active{background:#fff;box-shadow:inset 3px 0 0 var(--signal)}
+  .seg .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .seg .name{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+  .seg .tag{font-family:var(--mono);font-size:10px;color:var(--muted);
+    background:var(--paper2);padding:2px 6px;border-radius:10px;flex:none}
+  .seg .meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;
+    display:flex;gap:12px;flex-wrap:wrap}
+  .seg .meta .b{color:var(--best)}
+
+  .detail{padding:0 0 30px}
+  .detail .hd{padding:14px;border-bottom:1px solid var(--line)}
+  .detail .hd input.title{font-size:16px;font-weight:600;border:none;background:transparent;
+    width:100%;color:var(--text);font-family:var(--sans)}
+  .detail .hd input.title:focus{outline:none;border-bottom:1px solid var(--signal)}
+  .detail .hd .stats{font-family:var(--mono);font-size:11px;color:var(--muted);
+    margin-top:6px;display:flex;gap:14px;flex-wrap:wrap}
+  .toolbar{display:flex;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);
+    flex-wrap:wrap}
+  .tbtn{font-family:var(--mono);font-size:11px;letter-spacing:.04em;cursor:pointer;
+    background:var(--paper2);color:var(--text);border:1px solid var(--line);
+    padding:6px 10px;border-radius:3px}
+  .tbtn:hover{border-color:var(--signal);color:var(--signal)}
+  .tbtn.on{background:var(--signal);color:#fff;border-color:var(--signal)}
+  .banner{font-family:var(--mono);font-size:11px;color:var(--signal);
+    padding:8px 14px;background:#fff4f1;border-bottom:1px solid var(--line)}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  th{text-align:right;font-weight:500;color:var(--muted);font-size:10px;
+    letter-spacing:.08em;text-transform:uppercase;padding:8px 14px 5px;
+    border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
+  td{padding:6px 14px;border-bottom:1px solid var(--paper2);text-align:right}
+  td:first-child{text-align:left}
+  tr.best td{background:#eafaf2}
+  tr.best .rk{color:var(--best);font-weight:700}
+  .rk{color:var(--muted)}
+  .delta{color:var(--signal);font-size:11px}
+  .delta.z{color:var(--best)}
+  .spark{height:46px;margin:6px 14px 0;display:block}
+
+  .sub{border-bottom:1px solid var(--line)}
+  .sub .shd{display:flex;align-items:center;gap:8px;padding:10px 14px 4px}
+  .sub .swatch{width:10px;height:10px;border-radius:2px;flex:none}
+  .sub .sname{font-weight:600;font-size:13px;border:none;background:transparent;
+    flex:1;font-family:var(--sans);color:var(--text)}
+  .sub .sname:focus{outline:none;border-bottom:1px solid var(--signal)}
+  .sub .sbest{font-family:var(--mono);font-size:11px;color:var(--best)}
+
+  .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.6}
+  .empty code{font-family:var(--mono);font-size:12px;color:var(--text);
+    background:var(--paper2);padding:1px 5px;border-radius:3px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+    background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12px;
+    padding:9px 16px;border-radius:4px;z-index:9999;opacity:0;transition:.25s;pointer-events:none}
+  .toast.show{opacity:1}
+  .leaflet-container{font-family:var(--mono)}
+  .seg-tip{font-family:var(--mono);font-size:11px}
+
+  @media (max-width:900px){
+    .tabs{display:flex}
+    header .sub{display:none}
+    header{gap:10px;padding:10px 12px}
+    header button{padding:6px 9px}
+    main{grid-template-columns:1fr;grid-template-rows:1fr}
+    main>[data-panel]{grid-row:1;grid-column:1;display:none;height:100%;
+      border-left:none!important;border-right:none!important}
+    body.tab-rides [data-panel="rides"]{display:block}
+    body.tab-map [data-panel="map"]{display:block}
+    body.tab-segs [data-panel="segs"]{display:block}
+    .panel{-webkit-overflow-scrolling:touch}
+    .toolbar{position:sticky;top:0;background:var(--paper);z-index:5}
+    th,td{padding-left:12px;padding-right:12px}
+  }
+</style>
+</head>
+<body class="tab-map">
+<header>
+  <svg class="contours" preserveAspectRatio="none" viewBox="0 0 800 60">
+    <g fill="none" stroke="#9fb0a4" stroke-width="1">
+      <path d="M0 50 Q120 30 240 44 T520 38 T800 46"/>
+      <path d="M0 40 Q120 20 240 34 T520 28 T800 36"/>
+      <path d="M0 30 Q120 10 240 24 T520 18 T800 26"/>
+      <path d="M0 20 Q120 2 240 14 T520 8 T800 16"/>
+    </g>
+  </svg>
+  <h1>Con<b>tour</b></h1>
+  <span class="sub">trail segment analyzer · gpx in, no account</span>
+  <span class="spacer"></span>
+  <button id="demoBtn">Load demo rides</button>
+  <button id="clearBtn">Clear all</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="rides">Rides</button>
+  <button data-tab="map" class="active">Map</button>
+  <button data-tab="segs">Segments</button>
+</nav>
+
+<main>
+  <section class="panel" data-panel="rides">
+    <div class="sec-label">Rides <span class="n" id="rideCount">0</span></div>
+    <div class="drop" id="drop">
+      <b>Drop .gpx files</b>
+      or tap to choose · multiple ok
+      <input type="file" id="file" accept=".gpx" multiple hidden />
+    </div>
+    <div id="rideList"></div>
+    <div id="totals" class="totals"></div>
+
+    <div class="sec-label">Detection</div>
+    <div class="params">
+      <div class="param"><label>Match radius</label>
+        <input type="range" id="pRadius" min="10" max="60" step="5" value="25">
+        <span class="val" id="vRadius">25 m</span></div>
+      <div class="param"><label>Min length</label>
+        <input type="range" id="pLen" min="100" max="1500" step="50" value="250">
+        <span class="val" id="vLen">250 m</span></div>
+      <div class="param"><label>Min rides</label>
+        <input type="range" id="pRides" min="2" max="8" step="1" value="2">
+        <span class="val" id="vRides">2</span></div>
+    </div>
+    <button class="run-btn" id="runBtn" disabled>Detect segments</button>
+  </section>
+
+  <div id="map" data-panel="map"></div>
+
+  <section class="panel" data-panel="segs">
+    <div id="segPane">
+      <div class="sec-label">Segments <span class="n" id="segCount">—</span></div>
+      <div id="segList">
+        <div class="empty">
+          Load rides and hit <code>Detect segments</code>.<br><br>
+          Stretches you've ridden on <b>2+ rides</b> get matched automatically — then ranked fastest-first.
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- geo helpers ---------- */
+const R=6371000;
+function hav(a,b){
+  const dLat=(b.lat-a.lat)*Math.PI/180, dLon=(b.lon-a.lon)*Math.PI/180;
+  const la1=a.lat*Math.PI/180, la2=b.lat*Math.PI/180;
+  const x=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x));
+}
+let ORIGIN=null, MPLON=1;
+function setOrigin(lat,lon){ORIGIN={lat,lon};MPLON=111320*Math.cos(lat*Math.PI/180);}
+function toXY(p){return {x:(p.lon-ORIGIN.lon)*MPLON, y:(p.lat-ORIGIN.lat)*111320};}
+
+/* ---------- gpx parse ---------- */
+function parseGPX(text,name){
+  const doc=new DOMParser().parseFromString(text,"application/xml");
+  if(doc.querySelector("parsererror")) throw new Error("bad xml");
+  const pts=[...doc.querySelectorAll("trkpt, rtept")].map(n=>{
+    const lat=+n.getAttribute("lat"), lon=+n.getAttribute("lon");
+    const e=n.querySelector("ele"), t=n.querySelector("time");
+    return {lat,lon,ele:e?+e.textContent:null,t:t?Date.parse(t.textContent):null};
+  }).filter(p=>isFinite(p.lat)&&isFinite(p.lon));
+  if(pts.length<2) throw new Error("no track points");
+  const nm=(doc.querySelector("trk>name,metadata>name")?.textContent||name||"ride").trim();
+  return {name:nm,raw:pts};
+}
+
+/* ---------- resample ---------- */
+function resample(pts,step){
+  const out=[pts[0]]; let acc=0;
+  for(let i=1;i<pts.length;i++){
+    let a=pts[i-1], b=pts[i], d=hav(a,b);
+    if(d===0) continue;
+    while(acc+d>=step){
+      const need=step-acc, f=need/d;
+      const np={lat:a.lat+(b.lat-a.lat)*f, lon:a.lon+(b.lon-a.lon)*f,
+        ele:(a.ele!=null&&b.ele!=null)?a.ele+(b.ele-a.ele)*f:a.ele,
+        t:(a.t!=null&&b.t!=null)?Math.round(a.t+(b.t-a.t)*f):a.t};
+      out.push(np); a=np; d=hav(a,b); acc=0;
+    }
+    acc+=d;
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+
+/* ---------- spatial grid ---------- */
+function buildGrid(P,cell){
+  const g=new Map();
+  for(let i=0;i<P.length;i++){
+    const xy=toXY(P[i]); P[i]._x=xy.x; P[i]._y=xy.y;
+    const k=Math.floor(xy.x/cell)+","+Math.floor(xy.y/cell);
+    (g.get(k)||g.set(k,[]).get(k)).push(i);
+  }
+  return g;
+}
+function neighbors(grid,P,x,y,cell,r){
+  const cx=Math.floor(x/cell), cy=Math.floor(y/cell), r2=r*r, res=[];
+  for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+    const arr=grid.get((cx+dx)+","+(cy+dy)); if(!arr)continue;
+    for(const j of arr){
+      const ddx=P[j]._x-x, ddy=P[j]._y-y, d2=ddx*ddx+ddy*ddy;
+      if(d2<=r2) res.push([j,d2]);
+    }
+  }
+  return res;
+}
+
+/* ---------- pairwise co-traversal ---------- */
+function matchPair(A,gridB,B,radius,cell,minLen,step){
+  const runs=[]; const maxMiss=Math.max(2,Math.ceil(40/step));
+  let cur=null, miss=0;
+  for(let i=0;i<A.length;i++){
+    const cand=neighbors(gridB,B,A[i]._x,A[i]._y,cell,radius);
+    let pick=null;
+    if(cand.length){
+      if(cur){
+        const want=cur.lastJ+1; let bestScore=Infinity;
+        for(const [j,d2] of cand){
+          if(j<cur.lastJ-2) continue;
+          const score=Math.abs(j-want)+d2/1000;
+          if(score<bestScore){bestScore=score;pick=j;}
+        }
+      }else{ let bd=Infinity; for(const [j,d2] of cand){ if(d2<bd){bd=d2;pick=j;} } }
+    }
+    if(pick!=null){
+      if(!cur){cur={a0:i,a1:i,b0:pick,b1:pick,lastJ:pick};}
+      else{cur.a1=i;cur.b1=pick;cur.lastJ=Math.max(cur.lastJ,pick);}
+      miss=0;
+    }else if(cur){ if(++miss>maxMiss){closeRun(cur,A,minLen,runs);cur=null;} }
+  }
+  if(cur)closeRun(cur,A,minLen,runs);
+  return runs;
+}
+function spanDist(P,i0,i1){let d=0;for(let i=i0+1;i<=i1;i++)d+=hav(P[i-1],P[i]);return d;}
+function closeRun(c,A,minLen,runs){ if(spanDist(A,c.a0,c.a1)>=minLen) runs.push(c); }
+
+/* ---------- union-find ---------- */
+function makeUF(){const p={};return{
+  find(x){while(p[x]!=null&&p[x]!==x)x=p[x]=p[p[x]]??p[x];return x;},
+  union(a,b){const ra=this.find(a),rb=this.find(b);if(ra!==rb)p[ra]=rb;},
+  add(x){if(p[x]==null)p[x]=x;}};}
+
+function mergeIntervals(ivs){
+  ivs.sort((a,b)=>a.i0-b.i0); const out=[];
+  for(const iv of ivs){const last=out[out.length-1];
+    if(last && iv.i0<=last.i1+5) last.i1=Math.max(last.i1,iv.i1);
+    else out.push({i0:iv.i0,i1:iv.i1});}
+  return out;
+}
+
+/* ---------- detection ---------- */
+function detect(rides,opt){
+  const {radius,minLen,minRides}=opt, step=12, cell=radius;
+  const R2=rides.map(r=>{const P=resample(r.raw,step);return {...r,P,grid:buildGrid(P,cell)};});
+  const perRide=R2.map(()=>[]); const rawPairRuns=[];
+  for(let a=0;a<R2.length;a++)for(let b=a+1;b<R2.length;b++){
+    const runs=matchPair(R2[a].P,R2[b].grid,R2[b].P,radius,cell,minLen,step);
+    for(const c of runs){
+      perRide[a].push({i0:c.a0,i1:c.a1});
+      perRide[b].push({i0:c.b0,i1:c.b1});
+      rawPairRuns.push({a,am:{i0:c.a0,i1:c.a1}, b,bm:{i0:c.b0,i1:c.b1}});
+    }
+  }
+  const merged=perRide.map(mergeIntervals);
+  const uid=(r,k)=>r+":"+k; const segMeta={};
+  merged.forEach((list,r)=>list.forEach((iv,k)=>{segMeta[uid(r,k)]={ride:r,...iv};}));
+  function findUid(r,mid){const list=merged[r];
+    for(let k=0;k<list.length;k++) if(mid>=list[k].i0-2&&mid<=list[k].i1+2) return uid(r,k);
+    return null;}
+  const uf=makeUF(); Object.keys(segMeta).forEach(u=>uf.add(u));
+  for(const pr of rawPairRuns){
+    const ua=findUid(pr.a,(pr.am.i0+pr.am.i1)>>1);
+    const ub=findUid(pr.b,(pr.bm.i0+pr.bm.i1)>>1);
+    if(ua&&ub)uf.union(ua,ub);
+  }
+  const clusters={};
+  for(const u in segMeta){const root=uf.find(u);(clusters[root]||(clusters[root]=[])).push(u);}
+  const segs=[];
+  for(const root in clusters){
+    const members=clusters[root];
+    const rideset=new Set(members.map(u=>segMeta[u].ride));
+    if(rideset.size<minRides) continue;
+    let rep=members[0],repLen=-1; const efforts=[];
+    for(const u of members){
+      const m=segMeta[u], P=R2[m.ride].P, seg=P.slice(m.i0,m.i1+1).map(cleanPt);
+      const dist=spanDist(P,m.i0,m.i1), a=P[m.i0], z=P[m.i1];
+      const time=(a.t!=null&&z.t!=null)?(z.t-a.t)/1000:null;
+      let up=0,dn=0;
+      for(let i=m.i0+1;i<=m.i1;i++){ if(P[i].ele!=null&&P[i-1].ele!=null){
+        const de=P[i].ele-P[i-1].ele; if(de>0)up+=de;else dn+=de;}}
+      efforts.push({ride:m.ride,name:rides[m.ride].name,dist,time,
+        speed:time?dist/time:null,up,down:dn,pts:seg});
+      if(dist>repLen){repLen=dist;rep=u;}
+    }
+    const byRide={};
+    for(const e of efforts){const cur=byRide[e.ride];
+      if(!cur) byRide[e.ride]=e;
+      else if(e.time!=null&&cur.time!=null){if(e.time<cur.time)byRide[e.ride]=e;}
+      else if(e.dist>cur.dist) byRide[e.ride]=e;}
+    const finalE=Object.values(byRide);
+    if(finalE.length<minRides) continue;
+    const repSeg=segMeta[rep], repGeom=R2[repSeg.ride].P.slice(repSeg.i0,repSeg.i1+1).map(cleanPt);
+    const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
+    const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
+    segs.push({geom:repGeom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
+      efforts:[...timed,...untimed],timed:timed.length>0,name:null,splits:[],subNames:{}});
+  }
+  segs.sort((a,b)=>b.dist-a.dist);
+  segs.forEach((s,i)=>{if(!s.name)s.name="Segment "+String.fromCharCode(65+i);});
+  return segs;
+}
+function cleanPt(p){return {lat:p.lat,lon:p.lon,ele:p.ele,t:p.t};}
+
+/* ---------- sub-segments ---------- */
+function nearestIdx(pts,pt){let bi=0,bd=Infinity;
+  for(let i=0;i<pts.length;i++){const d=hav(pts[i],pt);if(d<bd){bd=d;bi=i;}}return bi;}
+function geomCum(geom){const c=[0];for(let i=1;i<geom.length;i++)c.push(c[i-1]+hav(geom[i-1],geom[i]));return c;}
+function orderedCuts(s){
+  const cum=geomCum(s.geom);
+  return [...(s.splits||[])].map(c=>({c,d:cum[nearestIdx(s.geom,c)]}))
+    .sort((a,b)=>a.d-b.d).map(o=>o.c);
+}
+function effortStats(P,i0,i1,ride,name){
+  let dist=0,up=0,dn=0;
+  for(let i=i0+1;i<=i1;i++){dist+=hav(P[i-1],P[i]);
+    if(P[i].ele!=null&&P[i-1].ele!=null){const de=P[i].ele-P[i-1].ele;de>0?up+=de:dn+=de;}}
+  const a=P[i0],z=P[i1];
+  const time=(a&&z&&a.t!=null&&z.t!=null)?(z.t-a.t)/1000:null;
+  return {ride,name,dist,time,speed:(time&&dist)?dist/time:null,up,down:dn};
+}
+function subSegments(s){
+  const cuts=orderedCuts(s), n=cuts.length+1, subs=[];
+  for(let k=0;k<n;k++){
+    const name=(s.subNames&&s.subNames[k])||("Part "+(k+1));
+    const efforts=s.efforts.map(e=>{
+      const idxs=[0,...cuts.map(c=>nearestIdx(e.pts,c)),e.pts.length-1];
+      for(let i=1;i<idxs.length;i++) if(idxs[i]<idxs[i-1]) idxs[i]=idxs[i-1];
+      return effortStats(e.pts,idxs[k],idxs[k+1],e.ride,e.name);
+    });
+    const timed=efforts.filter(x=>x.time!=null).sort((a,b)=>a.time-b.time);
+    const untimed=efforts.filter(x=>x.time==null).sort((a,b)=>b.dist-a.dist);
+    subs.push({name,k,efforts:[...timed,...untimed],timed:timed.length>0});
+  }
+  return subs;
+}
+
+/* ---------- formatting ---------- */
+const COLORS=["#2a5d8f","#8f4a2a","#5d8f2a","#7a2a8f","#2a8f7a","#8f2a4a","#5a5a8f","#8f7a2a"];
+const SUBCOLORS=["#ff4d2e","#138a5e","#2a5d8f","#b8862a","#7a2a8f","#2a8f7a","#8f2a4a"];
+function fmtTime(s){if(s==null)return"—";s=Math.round(s);const m=Math.floor(s/60),x=s%60;
+  return m+":"+String(x).padStart(2,"0");}
+function fmtKmh(v){return v==null?"—":(v*3.6).toFixed(1);}
+function fmtDist(m){return m>=1000?(m/1000).toFixed(2)+" km":Math.round(m)+" m";}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function fmtDur(s){if(s==null)return"—";s=Math.round(s);const h=Math.floor(s/3600),
+  m=Math.floor((s%3600)/60),x=s%60;
+  return h>0?`${h}h ${String(m).padStart(2,"0")}m`:`${m}m ${String(x).padStart(2,"0")}s`;}
+
+/* ---------- ride statistics ---------- */
+function smoothElev(raw,w){
+  const e=raw.map(p=>p.ele), out=e.slice();
+  for(let i=0;i<e.length;i++){ if(e[i]==null){out[i]=null;continue;}
+    let s=0,c=0; for(let j=Math.max(0,i-w);j<=Math.min(e.length-1,i+w);j++) if(e[j]!=null){s+=e[j];c++;}
+    out[i]=c?s/c:null; }
+  return out;
+}
+function rideStats(raw){
+  const dist=spanDist(raw,0,raw.length-1);
+  const hasT=raw[0].t!=null&&raw[raw.length-1].t!=null;
+  const elapsed=hasT?(raw[raw.length-1].t-raw[0].t)/1000:null;
+  let moving=0,maxSp=0;
+  for(let i=1;i<raw.length;i++){
+    const d=hav(raw[i-1],raw[i]);
+    if(raw[i].t!=null&&raw[i-1].t!=null){ const dt=(raw[i].t-raw[i-1].t)/1000;
+      if(dt>0){ const sp=d/dt; if(sp>0.8)moving+=dt; if(sp<30)maxSp=Math.max(maxSp,sp); } }
+  }
+  const sm=smoothElev(raw,4); let up=0,dn=0;
+  for(let i=1;i<sm.length;i++){ if(sm[i]!=null&&sm[i-1]!=null){
+    const de=sm[i]-sm[i-1]; if(de>0.3)up+=de; else if(de<-0.3)dn+=de; } }
+  const eles=raw.map(p=>p.ele).filter(e=>e!=null);
+  return {dist,elapsed,moving:hasT?moving:null,
+    avgMov:moving>0?dist/moving:null, avgOv:elapsed>0?dist/elapsed:null,
+    maxSp:maxSp||null, up,down:dn,
+    eleMax:eles.length?Math.max(...eles):null, eleMin:eles.length?Math.min(...eles):null};
+}
+function rideProfile(raw){
+  const sm=smoothElev(raw,4), idx=[];
+  for(let i=0;i<raw.length;i++) if(sm[i]!=null) idx.push(i);
+  if(idx.length<2) return "";
+  const w=312,h=92,pad=4;
+  const cum=[0]; for(let i=1;i<raw.length;i++)cum.push(cum[i-1]+hav(raw[i-1],raw[i]));
+  const maxX=cum[cum.length-1]||1;
+  let mn=Infinity,mx=-Infinity; idx.forEach(i=>{mn=Math.min(mn,sm[i]);mx=Math.max(mx,sm[i]);});
+  const rg=(mx-mn)||1;
+  const X=i=>pad+(cum[i]/maxX)*(w-2*pad);
+  const Y=i=>h-pad-((sm[i]-mn)/rg)*(h-2*pad-8);
+  const line=idx.map(i=>X(i).toFixed(1)+","+Y(i).toFixed(1)).join(" ");
+  const area=`${X(idx[0]).toFixed(1)},${h-pad} ${line} ${X(idx[idx.length-1]).toFixed(1)},${h-pad}`;
+  return `<svg class="spark" style="height:92px" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polygon points="${area}" fill="#138a5e22"/>
+    <polyline points="${line}" fill="none" stroke="#138a5e" stroke-width="1.5"/></svg>`;
+}
+
+/* ---------- persistence ---------- */
+const round6=v=>v==null?null:Math.round(v*1e6)/1e6;
+function packRaw(a){return a.map(p=>[round6(p.lat),round6(p.lon),
+  p.ele==null?null:Math.round(p.ele*10)/10,p.t==null?null:p.t]);}
+function unpackRaw(a){return a.map(q=>({lat:q[0],lon:q[1],ele:q[2],t:q[3]}));}
+function packSeg(s){return {name:s.name,dist:s.dist,up:s.up,down:s.down,timed:s.timed,
+  splits:s.splits||[],subNames:s.subNames||{},geom:packRaw(s.geom),
+  efforts:s.efforts.map(e=>({ride:e.ride,name:e.name,dist:e.dist,time:e.time,
+    speed:e.speed,up:e.up,down:e.down,pts:packRaw(e.pts)}))};}
+function unpackSeg(o){return {name:o.name,dist:o.dist,up:o.up,down:o.down,timed:o.timed,
+  splits:o.splits||[],subNames:o.subNames||{},geom:unpackRaw(o.geom),
+  efforts:o.efforts.map(e=>({...e,pts:unpackRaw(e.pts)}))};}
+
+let _saveT=null;
+function save(){ if(!window.storage) return;
+  clearTimeout(_saveT);
+  _saveT=setTimeout(async()=>{
+    try{ await window.storage.set("contour:rides",
+      JSON.stringify(RIDES.map(r=>({name:r.name,raw:packRaw(r.raw)}))), false); }catch(e){}
+    try{ const sp=JSON.stringify(SEGS.map(packSeg));
+      if(sp.length<4500000){ await window.storage.set("contour:segs",sp,false); }
+      else { try{await window.storage.delete("contour:segs",false);}catch(e){}
+        toast("Segments too large to save"); }
+    }catch(e){}
+  },400);
+}
+async function clearStore(){ if(!window.storage)return;
+  try{await window.storage.delete("contour:rides",false);}catch(e){}
+  try{await window.storage.delete("contour:segs",false);}catch(e){}
+}
+async function load(){ if(!window.storage)return;
+  try{const r=await window.storage.get("contour:rides",false);
+    if(r&&r.value){RIDES=JSON.parse(r.value).map(o=>({name:o.name,raw:unpackRaw(o.raw)}));}}catch(e){}
+  try{const s=await window.storage.get("contour:segs",false);
+    if(s&&s.value){SEGS=JSON.parse(s.value).map(unpackSeg);}}catch(e){}
+  if(RIDES.length){setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
+    renderRides();drawRides();fitAll();$("runBtn").disabled=RIDES.length<2;}
+  if(SEGS.length){drawSegs();renderSegPane();toast("Restored "+RIDES.length+" rides");}
+}
+
+/* ---------- state + map ---------- */
+let RIDES=[], SEGS=[], SEL=-1, RSEL=-1, splitMode=false;
+let map, rideLayers=[], segLayers=[], splitMarkers=[];
+const $=id=>document.getElementById(id);
+
+function initMap(){
+  map=L.map("map",{zoomControl:true,tap:true}).setView([38.86,-120.0],12);
+  const esriTopo=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",{
+    maxZoom:19,attribution:'Tiles © Esri'});
+  const otm=L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",{
+    maxZoom:17,attribution:'© OpenTopoMap (CC-BY-SA) · © OpenStreetMap contributors'});
+  const street=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+    maxZoom:19,attribution:'© OpenStreetMap contributors'});
+  const sat=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{
+    maxZoom:19,attribution:'Imagery © Esri'});
+  esriTopo.addTo(map);
+  L.control.layers({"Topo":esriTopo,"OpenTopoMap":otm,"Street":street,"Satellite":sat}).addTo(map);
+  map.on("click",onMapClick);
+  setTimeout(()=>map.invalidateSize(),200);
+  setTimeout(()=>map.invalidateSize(),800);
+}
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");
+  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),2200);}
+
+/* ---------- ride add/remove ---------- */
+function addRides(files){
+  let added=0, pend=files.length; if(!pend)return;
+  [...files].forEach(f=>{const rd=new FileReader();
+    rd.onload=()=>{ try{RIDES.push(parseGPX(rd.result,f.name.replace(/\.gpx$/i,"")));added++;}
+      catch(e){toast("Skipped "+f.name+": "+e.message);}
+      if(--pend===0) afterAdd(added); };
+    rd.readAsText(f);});
+}
+function afterAdd(n){
+  if(!ORIGIN&&RIDES.length) setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
+  renderRides();drawRides();fitAll();
+  $("runBtn").disabled=RIDES.length<2;
+  if(n)toast(n+" ride"+(n>1?"s":"")+" loaded"); save();
+}
+function renderRides(){
+  $("rideCount").textContent=RIDES.length;
+  const el=$("rideList"); el.innerHTML="";
+  RIDES.forEach((r,i)=>{
+    const dist=spanDist(r.raw,0,r.raw.length-1);
+    const d=document.createElement("div"); d.className="ride";
+    d.innerHTML=`<span class="sw" style="background:${COLORS[i%COLORS.length]}"></span>
+      <span class="nm" title="view stats">${escapeHtml(r.name)}</span>
+      <span class="mi">${fmtDist(dist)}</span><span class="x" title="remove">✕</span>`;
+    d.querySelector(".nm").onclick=()=>selectRide(i);
+    d.querySelector(".x").onclick=()=>{RIDES.splice(i,1); if(!RIDES.length)ORIGIN=null;
+      SEGS=[];SEL=-1;RSEL=-1;splitMode=false;renderRides();drawRides();drawSegs();renderSegPane();fitAll();
+      $("runBtn").disabled=RIDES.length<2; save();};
+    el.appendChild(d);
+  });
+  renderTotals();
+}
+function renderTotals(){
+  const el=$("totals"); if(!el)return;
+  if(!RIDES.length){el.innerHTML="";return;}
+  let dist=0,up=0,time=0,hasT=false;
+  RIDES.forEach(r=>{const s=rideStats(r.raw);dist+=s.dist;up+=s.up;
+    if(s.elapsed!=null){time+=s.elapsed;hasT=true;}});
+  el.innerHTML=`<div class="tot-row"><span>Total distance</span><b>${fmtDist(dist)}</b></div>
+    <div class="tot-row"><span>Total vertical</span><b>↑${Math.round(up)} m</b></div>
+    <div class="tot-row"><span>Total time</span><b>${hasT?fmtDur(time):"—"}</b></div>
+    <div class="tot-row"><span>Rides</span><b>${RIDES.length}</b></div>`;
+}
+function drawRides(){
+  rideLayers.forEach(l=>map.removeLayer(l));rideLayers=[];
+  RIDES.forEach((r,i)=>{
+    const dim=RSEL>=0&&RSEL!==i;
+    const pl=L.polyline(r.raw.map(p=>[p.lat,p.lon]),
+      {color:COLORS[i%COLORS.length],weight:RSEL===i?4:2.5,opacity:dim?.2:(RSEL===i?.9:.55)})
+      .addTo(map).bindTooltip(r.name,{sticky:true,className:"seg-tip"});
+    pl.on("click",()=>selectRide(i));
+    rideLayers.push(pl);
+  });
+}
+function fitAll(){const all=[];RIDES.forEach(r=>r.raw.forEach(p=>all.push([p.lat,p.lon])));
+  if(all.length)map.fitBounds(L.latLngBounds(all).pad(.08));}
+
+/* ---------- detect ---------- */
+function run(){
+  if(RIDES.length<2)return;
+  $("runBtn").textContent="Detecting…";$("runBtn").disabled=true;
+  setTimeout(()=>{
+    try{SEGS=detect(RIDES,{radius:+$("pRadius").value,minLen:+$("pLen").value,minRides:+$("pRides").value});}
+    catch(e){toast("Error: "+e.message);SEGS=[];}
+    SEL=-1;RSEL=-1;splitMode=false;drawSegs();renderSegPane();
+    $("runBtn").textContent="Detect segments";$("runBtn").disabled=false;
+    toast(SEGS.length?SEGS.length+" segment"+(SEGS.length>1?"s":"")+" found":"No repeated sections — loosen params");
+    if(SEGS.length&&isMobile()) setTab("segs");
+    save();
+  },30);
+}
+
+/* ---------- map drawing of segments ---------- */
+function drawSegs(){
+  segLayers.forEach(l=>map.removeLayer(l));segLayers=[];
+  splitMarkers.forEach(m=>map.removeLayer(m));splitMarkers=[];
+  SEGS.forEach((s,i)=>{
+    const active=i===SEL;
+    if(active && s.splits && s.splits.length){
+      // draw each sub-piece in its own color
+      const cum=geomCum(s.geom);
+      const cuts=orderedCuts(s).map(c=>nearestIdx(s.geom,c)).sort((a,b)=>a-b);
+      const bounds=[0,...cuts,s.geom.length-1];
+      for(let k=0;k<bounds.length-1;k++){
+        const slice=s.geom.slice(bounds[k],bounds[k+1]+1).map(p=>[p.lat,p.lon]);
+        const pl=L.polyline(slice,{color:SUBCOLORS[k%SUBCOLORS.length],weight:6,opacity:1})
+          .addTo(map).bindTooltip(((s.subNames&&s.subNames[k])||("Part "+(k+1))),
+            {sticky:true,className:"seg-tip"});
+        pl.on("click",()=>selectSeg(i));
+        segLayers.push(pl);
+      }
+    }else{
+      const pl=L.polyline(s.geom.map(p=>[p.lat,p.lon]),
+        {color:active?"#ff4d2e":"#ff7a5c",weight:active?6:4,opacity:active?1:.85})
+        .addTo(map).bindTooltip(s.name+" · "+fmtDist(s.dist),{sticky:true,className:"seg-tip"});
+      pl.on("click",()=>selectSeg(i));
+      segLayers.push(pl);
+    }
+  });
+  // split markers for selected
+  if(SEL>=0){
+    const s=SEGS[SEL];
+    (s.splits||[]).forEach((c,ci)=>{
+      const mk=L.circleMarker([c.lat,c.lon],{radius:7,color:"#16201b",weight:2,
+        fillColor:"#fff",fillOpacity:1}).addTo(map)
+        .bindTooltip("split — click to remove",{className:"seg-tip"});
+      mk.on("click",ev=>{L.DomEvent.stop(ev);
+        s.splits.splice(ci,1); reindexSubNames(s); drawSegs(); renderSegPane(); save();});
+      splitMarkers.push(mk);
+    });
+  }
+}
+function reindexSubNames(s){ s.subNames={}; } // names are positional; reset on structural change
+
+function onMapClick(e){
+  if(!splitMode||SEL<0) return;
+  const s=SEGS[SEL], click={lat:e.latlng.lat,lon:e.latlng.lng};
+  const gi=nearestIdx(s.geom,click), gp=s.geom[gi];
+  if(hav(gp,click)>60){ toast("Click on the highlighted trail"); return; }
+  // avoid near-duplicate
+  if((s.splits||[]).some(c=>hav(c,gp)<15)){ toast("Already a split there"); return; }
+  s.splits=s.splits||[]; s.splits.push({lat:gp.lat,lon:gp.lon});
+  reindexSubNames(s); drawSegs(); renderSegPane(); save();
+}
+
+/* ---------- right panel ---------- */
+function renderSegPane(){
+  $("segCount").textContent=SEGS.length||"—";
+  const el=$("segList");
+  if(RSEL>=0){renderRideDetail(el,RIDES[RSEL]);return;}
+  if(SEL>=0){renderDetail(el,SEGS[SEL]);return;}
+  if(!SEGS.length){
+    el.innerHTML=`<div class="empty">No segments yet.<br><br>
+      If detection came back empty, raise <b>match radius</b> or lower <b>min length</b>.</div>`;
+    return;
+  }
+  el.innerHTML="";
+  SEGS.forEach((s,i)=>{
+    const best=s.timed?s.efforts[0]:null;
+    const subTag=(s.splits&&s.splits.length)?`<span class="tag">${s.splits.length+1} parts</span>`:"";
+    const d=document.createElement("div");d.className="seg"+(i===SEL?" active":"");
+    d.innerHTML=`<div class="top"><span class="name">${escapeHtml(s.name)}</span>
+      <span class="tag">${s.efforts.length} rides</span></div>
+      <div class="meta"><span>${fmtDist(s.dist)}</span><span>↑${Math.round(s.up)}m</span>
+      ${best?`<span class="b">best ${fmtTime(best.time)}</span>`:`<span>untimed</span>`}${subTag}</div>`;
+    d.onclick=()=>selectSeg(i);
+    el.appendChild(d);
+  });
+}
+function selectSeg(i){ if(SEL!==i)splitMode=false; RSEL=-1;
+  SEL=(SEL===i?-1:i); drawRides(); drawSegs(); renderSegPane();
+  if(SEL>=0){map.fitBounds(L.latLngBounds(SEGS[i].geom.map(p=>[p.lat,p.lon])).pad(.25));}}
+function selectRide(i){ SEL=-1; splitMode=false; RSEL=(RSEL===i?-1:i);
+  drawRides(); drawSegs(); renderSegPane();
+  if(RSEL>=0){map.fitBounds(L.latLngBounds(RIDES[i].raw.map(p=>[p.lat,p.lon])).pad(.12));}}
+
+function statRow(k,v){return `<tr><td>${k}</td><td style="font-weight:600;color:var(--text)">${v}</td></tr>`;}
+function renderRideDetail(el,r){
+  const s=rideStats(r.raw);
+  el.innerHTML=`<div class="detail">
+    <div class="hd">
+      <div class="title" style="font-weight:600;font-size:16px">${escapeHtml(r.name)}</div>
+      <div class="stats"><span>${fmtDist(s.dist)}</span>
+        <span>${s.elapsed!=null?fmtDur(s.elapsed)+" elapsed":"no timestamps"}</span></div>
+    </div>
+    ${rideProfile(r.raw)}
+    <table><tbody>
+      ${statRow("Distance",fmtDist(s.dist))}
+      ${statRow("Elapsed time",s.elapsed!=null?fmtDur(s.elapsed):"—")}
+      ${statRow("Moving time",s.moving!=null?fmtDur(s.moving):"—")}
+      ${statRow("Vertical gain","↑ "+Math.round(s.up)+" m")}
+      ${statRow("Vertical loss","↓ "+Math.round(Math.abs(s.down))+" m")}
+      ${statRow("Avg speed · moving",s.avgMov!=null?fmtKmh(s.avgMov)+" km/h":"—")}
+      ${statRow("Avg speed · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" km/h":"—")}
+      ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" km/h":"—")}
+      ${statRow("Elevation range",s.eleMin!=null?Math.round(s.eleMin)+"–"+Math.round(s.eleMax)+" m":"—")}
+    </tbody></table>
+    <div style="padding:14px"><button class="run-btn" style="margin:0;width:100%" id="backRide">← Back to segments</button></div>
+  </div>`;
+  $("backRide").onclick=()=>{RSEL=-1;drawRides();renderSegPane();};
+}
+
+function leaderboardTable(efforts,timed){
+  const best=timed?efforts[0]:null;
+  const rows=efforts.map((e,i)=>{
+    const isBest=timed&&i===0;
+    let delta=""; if(timed) delta=isBest?`<span class="delta z">PR</span>`
+      :`<span class="delta">+${fmtTime(e.time-best.time)}</span>`;
+    return `<tr class="${isBest?"best":""}"><td>${escapeHtml(e.name)}</td>
+      <td class="rk">${timed?(i+1):"—"}</td>
+      <td>${fmtTime(e.time)} ${delta}</td><td>${fmtKmh(e.speed)}</td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Ride</th><th>Rk</th><th>Time</th><th>km/h</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+function renderDetail(el,s){
+  const hasSplits=s.splits&&s.splits.length>0;
+  let body;
+  if(hasSplits){
+    const subs=subSegments(s);
+    body=subs.map(sub=>`<div class="sub">
+      <div class="shd">
+        <span class="swatch" style="background:${SUBCOLORS[sub.k%SUBCOLORS.length]}"></span>
+        <input class="sname" data-k="${sub.k}" value="${escapeHtml(sub.name)}" />
+        ${sub.timed?`<span class="sbest">best ${fmtTime(sub.efforts[0].time)}</span>`:""}
+      </div>
+      ${leaderboardTable(sub.efforts,sub.timed)}</div>`).join("");
+  }else{
+    body=(s.timed?spark(s):"")+leaderboardTable(s.efforts,s.timed);
+  }
+  el.innerHTML=`<div class="detail">
+    <div class="hd">
+      <input class="title" id="segName" value="${escapeHtml(s.name)}" />
+      <div class="stats"><span>${fmtDist(s.dist)}</span><span>↑${Math.round(s.up)} m</span>
+        <span>↓${Math.round(Math.abs(s.down))} m</span><span>${s.efforts.length} attempts</span></div>
+    </div>
+    <div class="toolbar">
+      <span class="tbtn ${splitMode?"on":""}" id="splitBtn">✂ ${splitMode?"Splitting — click trail":"Split into sub-segments"}</span>
+      ${hasSplits?`<span class="tbtn" id="clearSplits">Clear splits</span>`:""}
+      <span class="tbtn" id="backBtn">← All</span>
+    </div>
+    ${splitMode?`<div class="banner">Click on the highlighted trail to drop a cut. Click a white dot to remove it.</div>`:""}
+    ${body}</div>`;
+
+  $("segName").oninput=ev=>{s.name=ev.target.value||s.name;};
+  $("segName").onblur=()=>{renderSegPane();drawSegs();save();};
+  $("splitBtn").onclick=()=>{splitMode=!splitMode;renderDetail(el,s);drawSegs();
+    if(splitMode&&isMobile()){setTab("map");toast("Tap the trail to add a cut");}};
+  $("backBtn").onclick=()=>{SEL=-1;splitMode=false;drawSegs();renderSegPane();};
+  const cs=$("clearSplits"); if(cs)cs.onclick=()=>{s.splits=[];s.subNames={};
+    splitMode=false;drawSegs();renderDetail(el,s);save();};
+  el.querySelectorAll(".sname").forEach(inp=>{
+    inp.oninput=()=>{s.subNames=s.subNames||{};s.subNames[+inp.dataset.k]=inp.value;};
+    inp.onblur=()=>{drawSegs();save();};
+  });
+}
+function spark(s){
+  const P=s.geom, eles=P.map(p=>p.ele).filter(e=>e!=null);
+  if(eles.length<2) return "";
+  const w=312,h=46,pad=2; let cum=0;const xs=[0];
+  for(let i=1;i<P.length;i++){cum+=hav(P[i-1],P[i]);xs.push(cum);}
+  const maxX=cum||1, mn=Math.min(...eles), mx=Math.max(...eles), rg=(mx-mn)||1;
+  const pts=P.map((p,i)=>{const x=pad+(xs[i]/maxX)*(w-2*pad);
+    const y=h-pad-((p.ele-mn)/rg)*(h-2*pad);return x.toFixed(1)+","+y.toFixed(1);}).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline points="${pts}" fill="none" stroke="#138a5e" stroke-width="1.5"/></svg>`;
+}
+
+/* ---------- demo ---------- */
+function demo(){
+  function build(seedJitter,paceMul,off){
+    const base=[];
+    for(let i=0;i<=20;i++)base.push([38.870+off*0.0006+i*0.0002,-120.010+off*0.0004+i*0.00018,2300-i*1.5]);
+    const corral=[];
+    for(let i=0;i<=60;i++){const t=i/60;
+      corral.push([38.874+0.010*t+0.0008*Math.sin(t*9),-120.006-0.012*t+0.0009*Math.cos(t*7),2270-230*t]);}
+    base.push(...corral);
+    const last=corral[corral.length-1];
+    for(let i=1;i<=22;i++)base.push([last[0]-i*0.00018,last[1]-i*0.00012-off*0.0003,last[2]-i*1.2]);
+    let clock=Date.UTC(2025,5,1+off,16,0,0);
+    return base.map((p,i)=>{
+      const jx=Math.sin(i*12.9+seedJitter)*0.00006, jy=Math.cos(i*7.3+seedJitter)*0.00006;
+      if(i>0){const d=hav({lat:base[i-1][0],lon:base[i-1][1]},{lat:p[0],lon:p[1]});
+        const sp=(3.2+1.6*Math.sin(i*0.3))*paceMul; clock+=Math.max(800,(d/sp)*1000);}
+      return {lat:p[0]+jx,lon:p[1]+jy,ele:p[2]+Math.sin(i+seedJitter)*1.5,t:Math.round(clock)};});
+  }
+  RIDES=[{name:"Tahoe loop · Jun 1",raw:build(1,1.00,0)},
+    {name:"Corral lap · Jun 4",raw:build(2,0.82,1)},
+    {name:"Evening spin · Jun 9",raw:build(3,1.18,2)}];
+  ORIGIN=null;setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
+  SEGS=[];SEL=-1;RSEL=-1;splitMode=false;renderRides();drawRides();drawSegs();renderSegPane();fitAll();
+  $("runBtn").disabled=false; toast("3 demo rides loaded — hit Detect"); save();
+}
+
+/* ---------- wiring ---------- */
+/* ---------- responsive tabs ---------- */
+function isMobile(){return window.matchMedia("(max-width:900px)").matches;}
+function setTab(t){
+  document.body.classList.remove("tab-rides","tab-map","tab-segs");
+  document.body.classList.add("tab-"+t);
+  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("active",b.dataset.tab===t));
+  if(t==="map"&&map) setTimeout(()=>map.invalidateSize(),60);
+}
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+window.addEventListener("resize",()=>{if(map)setTimeout(()=>map.invalidateSize(),120);});
+window.addEventListener("load",()=>{if(map)map.invalidateSize();});
+window.addEventListener("orientationchange",()=>{setTimeout(()=>map&&map.invalidateSize(),350);});
+
+initMap();
+$("file").onchange=e=>addRides(e.target.files);
+$("drop").onclick=()=>$("file").click();
+["dragover","dragenter"].forEach(ev=>$("drop").addEventListener(ev,e=>{e.preventDefault();$("drop").classList.add("over");}));
+["dragleave","drop"].forEach(ev=>$("drop").addEventListener(ev,e=>{e.preventDefault();$("drop").classList.remove("over");}));
+$("drop").addEventListener("drop",e=>addRides(e.dataTransfer.files));
+$("runBtn").onclick=run;
+$("demoBtn").onclick=demo;
+$("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGIN=null;
+  renderRides();drawRides();drawSegs();renderSegPane();$("runBtn").disabled=true;
+  clearStore();toast("Cleared");};
+[["pRadius","vRadius"," m"],["pLen","vLen"," m"],["pRides","vRides",""]].forEach(([p,v,suf])=>{
+  $(p).oninput=()=>$(v).textContent=$(p).value+suf;});
+
+load();
+</script>
+</body>
+</html>
