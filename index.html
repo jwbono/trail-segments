@@ -140,6 +140,13 @@
   .toast.show{opacity:1}
   .leaflet-container{font-family:var(--mono)}
   .seg-tip{font-family:var(--mono);font-size:11px}
+  .se-mk{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;
+    justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700;
+    color:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)}
+  .se-mk.start{background:#138a5e}
+  .se-mk.fin{background:#d12e2e}
+  .ride.sel{background:#fff;box-shadow:inset 3px 0 0 var(--signal)}
+  .ride-stats{padding:2px 0 10px;background:#fff;border-bottom:1px solid var(--line)}
 
   @media (max-width:900px){
     .tabs{display:flex}
@@ -572,7 +579,7 @@ function renderRides(){
   const el=$("rideList"); el.innerHTML="";
   RIDES.forEach((r,i)=>{
     const dist=spanDist(r.raw,0,r.raw.length-1);
-    const d=document.createElement("div"); d.className="ride";
+    const d=document.createElement("div"); d.className="ride"+(RSEL===i?" sel":"");
     d.innerHTML=`<span class="sw" style="background:${COLORS[i%COLORS.length]}"></span>
       <span class="nm" title="view stats">${escapeHtml(r.name)}</span>
       <span class="mi">${fmtDist(dist)}</span><span class="x" title="remove">✕</span>`;
@@ -581,8 +588,25 @@ function renderRides(){
       SEGS=[];SEL=-1;RSEL=-1;splitMode=false;renderRides();drawRides();drawSegs();renderSegPane();fitAll();
       $("runBtn").disabled=RIDES.length<2; save();};
     el.appendChild(d);
+    if(RSEL===i){ const c=document.createElement("div"); c.innerHTML=rideStatsHTML(r);
+      el.appendChild(c.firstElementChild); }
   });
   renderTotals();
+}
+function rideStatsHTML(r){
+  const s=rideStats(r.raw);
+  return `<div class="ride-stats">${rideProfile(r.raw)}
+    <table><tbody>
+      ${statRow("Distance",fmtDist(s.dist))}
+      ${statRow("Elapsed time",s.elapsed!=null?fmtDur(s.elapsed):"—")}
+      ${statRow("Moving time",s.moving!=null?fmtDur(s.moving):"—")}
+      ${statRow("Vertical gain","↑ "+Math.round(s.up)+" m")}
+      ${statRow("Vertical loss","↓ "+Math.round(Math.abs(s.down))+" m")}
+      ${statRow("Avg · moving",s.avgMov!=null?fmtKmh(s.avgMov)+" km/h":"—")}
+      ${statRow("Avg · overall",s.avgOv!=null?fmtKmh(s.avgOv)+" km/h":"—")}
+      ${statRow("Max speed",s.maxSp!=null?fmtKmh(s.maxSp)+" km/h":"—")}
+      ${statRow("Elevation range",s.eleMin!=null?Math.round(s.eleMin)+"–"+Math.round(s.eleMax)+" m":"—")}
+    </tbody></table></div>`;
 }
 function renderTotals(){
   const el=$("totals"); if(!el)return;
@@ -653,7 +677,14 @@ function drawSegs(){
   });
   // split markers for selected
   if(SEL>=0){
-    const s=SEGS[SEL];
+    const s=SEGS[SEL], g=s.geom;
+    if(g&&g.length){
+      const mk=(ll,cls,txt,tip)=>L.marker(ll,{icon:L.divIcon({className:"",
+        html:`<div class="se-mk ${cls}">${txt}</div>`,iconSize:[22,22],iconAnchor:[11,11]})})
+        .addTo(map).bindTooltip(tip,{className:"seg-tip"});
+      segLayers.push(mk([g[0].lat,g[0].lon],"start","S","Start · direction of travel"));
+      segLayers.push(mk([g[g.length-1].lat,g[g.length-1].lon],"fin","F","Finish"));
+    }
     (s.splits||[]).forEach((c,ci)=>{
       const mk=L.circleMarker([c.lat,c.lon],{radius:7,color:"#16201b",weight:2,
         fillColor:"#fff",fillOpacity:1}).addTo(map)
@@ -681,7 +712,6 @@ function onMapClick(e){
 function renderSegPane(){
   $("segCount").textContent=SEGS.length||"—";
   const el=$("segList");
-  if(RSEL>=0){renderRideDetail(el,RIDES[RSEL]);return;}
   if(SEL>=0){renderDetail(el,SEGS[SEL]);return;}
   if(!SEGS.length){
     el.innerHTML=`<div class="empty">No segments yet.<br><br>
@@ -705,7 +735,7 @@ function selectSeg(i){ if(SEL!==i)splitMode=false; RSEL=-1;
   SEL=(SEL===i?-1:i); drawRides(); drawSegs(); renderSegPane();
   if(SEL>=0){map.fitBounds(L.latLngBounds(SEGS[i].geom.map(p=>[p.lat,p.lon])).pad(.25));}}
 function selectRide(i){ SEL=-1; splitMode=false; RSEL=(RSEL===i?-1:i);
-  drawRides(); drawSegs(); renderSegPane();
+  drawRides(); drawSegs(); renderRides(); renderSegPane();
   if(RSEL>=0){map.fitBounds(L.latLngBounds(RIDES[i].raw.map(p=>[p.lat,p.lon])).pad(.12));}}
 
 function statRow(k,v){return `<tr><td>${k}</td><td style="font-weight:600;color:var(--text)">${v}</td></tr>`;}
