@@ -235,8 +235,11 @@
       <select id="riderSelect" class="tin"></select>
       <input id="riderNew" class="tin" placeholder="New rider name" autocomplete="off" style="display:none">
       <div class="syncbtns">
-        <button class="tbtn" id="saveRepo">⇧ Save mine</button>
+        <button class="tbtn" id="saveRepo">⇧ Save rides</button>
         <button class="tbtn" id="loadRepo">↻ Reload all</button>
+      </div>
+      <div class="syncbtns">
+        <button class="tbtn" id="saveSegs">⇧ Save segments + cuts</button>
       </div>
       <details class="tokwrap"><summary>GitHub token (needed to save)</summary>
         <input id="ghToken" class="tin" type="password" placeholder="github_pat_…" autocomplete="off">
@@ -603,6 +606,29 @@ async function ghPutFile(o,repo,path,obj,msg,token,sha){
   if(!r.ok){const t=await r.text();throw new Error(r.status+" "+t.slice(0,140));}
   return await r.json();
 }
+async function saveSegments(){
+  const {owner,repo}=repoInfo(), token=getToken();
+  if(!token){ setSyncStatus("Add a GitHub token below to save."); toast("No token set"); return; }
+  if(!SEGS.length){ toast("No segments — run Detect first"); return; }
+  setSyncStatus("Saving "+SEGS.length+" segments…");
+  try{
+    const ex=await ghGetFile(owner,repo,"data/segments.json",token);
+    await ghPutFile(owner,repo,"data/segments.json",
+      {updated:new Date().toISOString(),segments:SEGS.map(packSeg)},
+      "Update segments",token,ex&&ex.sha);
+    setSyncStatus("Saved ✓ "+SEGS.length+" segments");
+    toast("Segments synced to repo");
+  }catch(e){ setSyncStatus("Error: "+e.message); toast("Save failed"); }
+}
+async function loadSegmentsFromRepo(){
+  const segf=await fetchJSON("data/segments.json?t="+Date.now());
+  if(segf&&Array.isArray(segf.segments)){
+    SEGS=segf.segments.map(unpackSeg); SEL=-1; splitMode=false;
+    drawSegs(); renderSegPane(); save();
+    return SEGS.length;
+  }
+  return 0;
+}
 async function syncToRepo(){
   const {owner,repo}=repoInfo(), rider=currentRider(), token=getToken();
   if(!token){ setSyncStatus("Add a GitHub token below to save."); toast("No token set"); return; }
@@ -643,6 +669,8 @@ async function loadFromRepo(auto){
   populateRiderSelect();
   renderRides();drawRides();fitVisible();$("runBtn").disabled=activeRideCount()<2;
   setSyncStatus("Loaded "+loaded+" rides from repo ("+man.riders.length+" rider"+(man.riders.length>1?"s":"")+")");
+  const nseg=await loadSegmentsFromRepo();
+  if(nseg) setSyncStatus("Loaded "+loaded+" rides + "+nseg+" segments from repo");
   if(!auto)toast("Loaded "+loaded+" rides"); save();
 }
 
@@ -1050,6 +1078,7 @@ $("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGI
   $(p).oninput=()=>$(v).textContent=$(p).value+suf;});
 
 $("saveRepo").onclick=syncToRepo;
+$("saveSegs").onclick=saveSegments;
 $("loadRepo").onclick=()=>loadFromRepo(false);
 $("riderSelect").onchange=()=>{toggleNewInput();
   if($("riderSelect").value!=="__new__")lsSet("contour:rider",$("riderSelect").value);};
