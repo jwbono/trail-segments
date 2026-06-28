@@ -26,7 +26,8 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
   body{font-family:var(--sans);color:var(--ink);background:var(--bg);
-    display:flex;flex-direction:column;height:100vh;overflow:hidden;
+    display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;
+    overscroll-behavior:none;
     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
   ::selection{background:var(--accent-soft)}
 
@@ -53,7 +54,9 @@
   .tabs button.active{background:var(--accent);color:#fff;box-shadow:var(--sh-1)}
 
   main{flex:1;display:grid;grid-template-columns:312px 1fr 360px;grid-template-rows:1fr;min-height:0}
-  .panel{background:var(--bg);overflow-y:auto;border-right:1px solid var(--line)}
+  .panel{background:var(--bg);overflow-y:auto;border-right:1px solid var(--line);
+    -webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+    padding-bottom:max(20px,env(safe-area-inset-bottom))}
   .panel:last-child{border-right:none;border-left:1px solid var(--line)}
   #map{height:100%;min-height:320px;background:#E9ECF3}
 
