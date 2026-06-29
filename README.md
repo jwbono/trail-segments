@@ -13,12 +13,19 @@ browser from a single `index.html`.
 
 - **Automatic segment detection.** Drop in two or more rides and Contour finds
   the stretches of trail they share — no manual segment drawing.
-- **Leaderboards.** Every matched effort is ranked fastest-first, with deltas to
-  the best time and per-effort speed.
+- **Personal progress.** Each segment shows your PR, your latest run vs your
+  best, where you stand among all your attempts, and a time-trend sparkline —
+  with a 🎉 PR alert when a newly imported ride beats your best.
+- **Leaderboards.** Every matched effort is ranked fastest-first and dated, with
+  deltas to the best time and per-effort speed.
 - **Ride stats.** Distance, elapsed/moving time, vertical gain/loss, average and
   max speed, and an elevation profile for each ride.
 - **Sub-segments.** Split any segment at points you click on the map; each part
-  gets its own leaderboard.
+  gets its own ranking, plus a "latest run, part by part vs your best" breakdown.
+- **Organize.** Rides carry editable tags and dates; filter the Rides tab by
+  rider, tag, or name search. Segments group by area (Tahoe, Bay Area, …).
+- **Clean imports.** Duplicate GPX uploads are detected and skipped, so
+  re-uploading the same ride from your phone won't clutter your data.
 - **Metric or imperial.** One toggle converts every distance, speed, and
   elevation. Your choice is remembered.
 - **Optional sharing.** Push your rides and detected segments to this GitHub repo
@@ -34,11 +41,17 @@ the repo.
 1. **Add rides.** Drag `.gpx` files onto the **Rides** panel, or tap it to pick
    files (multiple is fine). No files handy? Click **Demo rides** to explore with
    sample data.
-2. **Detect segments.** Optionally adjust the detection controls (below), then
-   click **Detect segments**. Any stretch ridden on at least *Min rides* rides is
-   matched automatically and listed in the **Segments** panel.
-3. **Explore.** Click a segment to open its leaderboard, elevation profile, and
-   start/finish pins on the map. Click a ride's name to see full ride stats.
+2. **Segments detect themselves.** Any stretch ridden on at least *Min rides*
+   rides is matched automatically as you add rides, and listed in the
+   **Segments** panel (grouped by area — e.g. Tahoe vs Bay Area — when your
+   rides span more than one region). Beat your best on a segment and you'll get
+   a 🎉 PR alert. Adjust the detection controls (below) and click **Detect
+   segments** to re-run by hand.
+3. **Track your progress.** Click a segment to open your **PR**, your **latest
+   run vs your best**, a **time trend**, and every attempt ranked — plus the
+   elevation profile and start/finish pins on the map. Click a ride's name to
+   see full ride stats. Re-running detection preserves any segments you've
+   renamed or split.
 4. **Split (optional).** Inside a segment, choose **Split into sub-segments** and
    click the highlighted trail to drop cuts. Click a white dot to remove a cut.
    Each part is ranked separately. Rename segments or parts by typing in their

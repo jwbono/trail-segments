@@ -178,7 +178,8 @@
   .lb-row>:not(.lb-bar){position:relative;z-index:1}
   .lb-rank{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--muted);text-align:center}
   .lb-row.best .lb-rank{color:var(--pos)}
-  .lb-name{font-family:var(--sans);font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lb-name{font-family:var(--sans);font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px;min-width:0}
+  .lb-name .lb-nm-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .lb-time{font-family:var(--mono);font-size:13.5px;font-weight:600}
   .lb-delta{font-family:var(--mono);font-size:11px;color:var(--muted);min-width:46px;text-align:right}
   .lb-delta.pr{color:var(--pos);font-weight:600}
@@ -280,6 +281,44 @@
   .tag-in{font-family:var(--sans);font-size:12px;border:1px dashed var(--line-2);border-radius:999px;
     padding:3px 11px;width:84px;background:var(--panel);color:var(--ink)}
   .tag-in:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .ride-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .ride-top{display:flex;align-items:baseline;gap:8px}
+  .ride-top .nm{flex:1;min-width:0}
+  .ride-top .mi{flex:none}
+  .ride-sub{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+  .ride .rdate{font-family:var(--mono);font-size:10.5px;color:var(--muted);flex:none}
+
+  /* segment area grouping */
+  .area-hd{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);padding:14px 18px 4px;display:flex;gap:8px;align-items:center}
+  .area-hd:first-child{padding-top:6px}
+  .area-hd .n{font-family:var(--mono);font-weight:600;font-size:11px;color:var(--accent);
+    background:var(--accent-soft);padding:1px 7px;border-radius:999px;letter-spacing:0}
+
+  /* progress summary in segment detail */
+  .prog{margin:10px 16px 4px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--r)}
+  .prog-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;
+    color:var(--muted);padding:3px 0}
+  .prog-row b{font-family:var(--mono);color:var(--ink);font-weight:600;font-size:13px}
+  .prog-row b.pr{color:var(--pos)}
+  svg.trend{margin:8px 0 0;height:44px}
+  .lb-name .lb-date{font-style:normal;font-family:var(--mono);font-size:10px;color:var(--muted);
+    opacity:.8;flex:none}
+  .lb-latest{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--accent);
+    background:var(--accent-soft);padding:1px 5px;border-radius:999px;flex:none;white-space:nowrap}
+
+  /* subsegment "where did I gain/lose time" */
+  .part-delta{margin:6px 16px 2px;padding:10px 12px;background:var(--bg);border-radius:var(--r);
+    border:1px solid var(--line)}
+  .pd-h{font-family:var(--sans);font-size:11px;color:var(--muted);margin-bottom:8px}
+  .pd-row{display:flex;flex-wrap:wrap;gap:6px}
+  .pd{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-sm);
+    padding:5px 9px;display:flex;flex-direction:column;gap:2px;min-width:64px}
+  .pd i{font-style:normal;font-family:var(--sans);font-size:10px;font-weight:500;color:var(--muted)}
+  .pd.pr{color:var(--pos);border-color:var(--pos-soft)}
+  .pd.slow{color:var(--warm)}
 </style>
 </head>
 <body class="tab-map">
@@ -376,11 +415,11 @@
     <ol class="qs-steps">
       <li><b>Add rides.</b> Drop <code>.gpx</code> files onto the Rides panel (or tap to choose —
         multiple is fine). No files handy? Hit <b>Demo rides</b> to explore with sample data.</li>
-      <li><b>Detect segments.</b> Tweak <b>Match radius</b>, <b>Min length</b>, and <b>Min rides</b>
-        if you like, then press <code>Detect segments</code>. Any stretch ridden on 2+ rides is
-        matched automatically.</li>
-      <li><b>Explore.</b> Click a segment for its leaderboard, elevation profile, and start/finish
-        pins on the map. Click a ride's name for full ride stats.</li>
+      <li><b>Segments detect themselves.</b> Any stretch ridden on 2+ rides is matched automatically
+        as you add rides — beat your best and you'll get a 🎉 <b>PR alert</b>. Tweak <b>Match radius</b>,
+        <b>Min length</b>, or <b>Min rides</b> and press <code>Detect segments</code> to re-run.</li>
+      <li><b>Track your progress.</b> Open a segment for your PR, latest run vs your best, a time
+        trend, and every attempt ranked. Click a ride's name for full ride stats.</li>
       <li><b>Split (optional).</b> Open a segment, choose <b>Split into sub-segments</b>, and click
         the highlighted trail to drop cuts — each part gets its own ranking.</li>
       <li><b>Units.</b> Toggle <b>Metric / Imperial</b> in the top bar anytime.</li>
@@ -639,6 +678,23 @@ function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"
 function fmtDur(s){if(s==null)return"—";s=Math.round(s);const h=Math.floor(s/3600),
   m=Math.floor((s%3600)/60),x=s%60;
   return h>0?`${h}h ${String(m).padStart(2,"0")}m`:`${m}m ${String(x).padStart(2,"0")}s`;}
+
+/* ---------- dates ---------- */
+function rideDateMs(r){return r&&r.raw&&r.raw[0]&&r.raw[0].t!=null?r.raw[0].t:null;}
+function effortDateMs(e){return e&&e.pts&&e.pts[0]&&e.pts[0].t!=null?e.pts[0].t:null;}
+function fmtDate(ms){if(ms==null)return"";return new Date(ms).toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});}
+function fmtDateShort(ms){if(ms==null)return"";return new Date(ms).toLocaleDateString(undefined,{month:"short",day:"numeric"});}
+
+/* ---------- geographic areas (Tahoe / Bay Area / coordinate fallback) ---------- */
+const REGIONS=[
+  {name:"Lake Tahoe", latMin:38.7,latMax:39.45, lonMin:-120.35,lonMax:-119.75},
+  {name:"SF Bay Area",latMin:36.9,latMax:38.15, lonMin:-122.85,lonMax:-121.45},
+];
+function areaName(lat,lon){
+  for(const r of REGIONS) if(lat>=r.latMin&&lat<=r.latMax&&lon>=r.lonMin&&lon<=r.lonMax) return r.name;
+  return lat.toFixed(2)+", "+lon.toFixed(2);
+}
+function segArea(s){const m=s.geom[Math.floor(s.geom.length/2)];return areaName(m.lat,m.lon);}
 
 /* ---------- ride statistics ---------- */
 function smoothElev(raw,w){
@@ -966,19 +1022,21 @@ function addRides(files){
 }
 function commitParsed(parsed){
   const seen=new Set(RIDES.map(rideSig));   // existing rides + within-batch
-  let added=0, dups=0;
+  let dups=0; const addedNames=[];
   parsed.forEach(r=>{ const sig=rideSig(r);
     if(seen.has(sig)){ dups++; return; }
-    seen.add(sig); RIDES.push(r); added++; });
-  afterAdd(added,dups);
+    seen.add(sig); RIDES.push(r); addedNames.push(r.name); });
+  afterAdd(addedNames,dups);
 }
-function afterAdd(n,dups){
+function afterAdd(addedNames,dups){
+  const n=addedNames.length;
   if(!ORIGIN&&RIDES.length) setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
   renderRides();drawRides();fitAll();
   updateRunBtn();
   const parts=[]; if(n)parts.push(n+" ride"+(n>1?"s":"")+" loaded");
   if(dups)parts.push(dups+" duplicate"+(dups>1?"s":"")+" skipped");
   if(parts.length)toast(parts.join(" · ")); save();
+  if(n&&activeRideCount()>=2) autoDetect(new Set(addedNames));  // #6 auto-detect, #2 PR alerts
 }
 function renderRides(){
   pruneFilters();
@@ -987,16 +1045,27 @@ function renderRides(){
   renderRiderChips();
   const el=$("rideList"); el.innerHTML="";
   let shown=0;
-  RIDES.forEach((r,i)=>{
+  // newest-first by ride date; rides without timestamps fall to the end, original order
+  const order=RIDES.map((r,i)=>i).sort((a,b)=>{
+    const da=rideDateMs(RIDES[a]), db=rideDateMs(RIDES[b]);
+    if(da==null&&db==null) return a-b; if(da==null) return 1; if(db==null) return -1; return db-da; });
+  order.forEach(i=>{
+    const r=RIDES[i];
     if(!rideVisible(r)) return;
     shown++;
     const dist=spanDist(r.raw,0,r.raw.length-1);
+    const dms=rideDateMs(r);
     const tags=(r.tags||[]).map(t=>`<span class="rtag">#${escapeHtml(t)}</span>`).join("");
+    const subBits=(r.rider?`<span class="rider">${escapeHtml(r.rider)}</span>`:"")
+      +(dms!=null?`<span class="rdate">${fmtDateShort(dms)}</span>`:"")+tags;
     const d=document.createElement("div"); d.className="ride"+(RSEL===i?" sel":"");
     d.innerHTML=`<span class="sw" style="background:${COLORS[i%COLORS.length]}"></span>
-      <span class="nm" title="view stats">${escapeHtml(r.name)}</span>
-      ${r.rider?`<span class="rider">${escapeHtml(r.rider)}</span>`:""}${tags}
-      <span class="mi">${fmtDist(dist)}</span><span class="x" title="remove">✕</span>`;
+      <div class="ride-body">
+        <div class="ride-top"><span class="nm" title="view stats">${escapeHtml(r.name)}</span>
+          <span class="mi">${fmtDist(dist)}</span></div>
+        ${subBits?`<div class="ride-sub">${subBits}</div>`:""}
+      </div>
+      <span class="x" title="remove">✕</span>`;
     d.querySelector(".nm").onclick=()=>selectRide(i);
     d.querySelector(".x").onclick=()=>{RIDES.splice(i,1); if(!RIDES.length)ORIGIN=null;
       SEGS=[];SEL=-1;RSEL=-1;splitMode=false;renderRides();drawRides();drawSegs();renderSegPane();fitAll();
@@ -1060,17 +1129,43 @@ function fitAll(){const all=[];RIDES.forEach(r=>r.raw.forEach(p=>all.push([p.lat
   if(all.length)map.fitBounds(L.latLngBounds(all).pad(.08));}
 
 /* ---------- detect ---------- */
-function run(){
+let _detectT=null;
+function autoDetect(announce){ clearTimeout(_detectT); _detectT=setTimeout(()=>run(announce),300); }
+// carry user edits (custom names, splits) from old segments onto freshly-detected ones
+function segMatch(a,b){
+  const a0=a.geom[0],a1=a.geom[a.geom.length-1],b0=b.geom[0],b1=b.geom[b.geom.length-1];
+  return hav(a0,b0)<60 && hav(a1,b1)<60 && Math.abs(a.dist-b.dist)<Math.max(a.dist,b.dist)*0.25;
+}
+function mergeSegEdits(oldSegs,fresh){
+  fresh.forEach(f=>{ const m=oldSegs.find(o=>segMatch(o,f));
+    if(!m) return;
+    if(m.name && !/^Segment [A-Z]$/.test(m.name)) f.name=m.name;        // keep renamed
+    if(m.splits&&m.splits.length){ f.splits=m.splits.map(c=>({lat:c.lat,lon:c.lon}));
+      f.subNames=Object.assign({},m.subNames||{}); }                    // keep cuts + part names
+  });
+  return fresh;
+}
+function run(announce){
+  const auto=announce instanceof Set;
   const rs=RIDES.filter(rideVisible);
-  if(rs.length<2){toast("Need 2+ rides selected");return;}
+  if(rs.length<2){ if(!auto)toast("Need 2+ rides selected"); return; }
   $("runBtn").textContent="Detecting…";$("runBtn").disabled=true;
   setTimeout(()=>{
-    try{SEGS=detect(rs,{radius:+$("pRadius").value,minLen:+$("pLen").value,minRides:+$("pRides").value});}
+    const prev=SEGS;
+    try{ const fresh=detect(rs,{radius:+$("pRadius").value,minLen:+$("pLen").value,minRides:+$("pRides").value});
+      SEGS=mergeSegEdits(prev,fresh); }
     catch(e){toast("Error: "+e.message);SEGS=[];}
     SEL=-1;RSEL=-1;splitMode=false;drawSegs();renderSegPane();
     $("runBtn").textContent="Detect segments";$("runBtn").disabled=false;
-    toast(SEGS.length?SEGS.length+" segment"+(SEGS.length>1?"s":"")+" found":"No repeated sections — loosen params");
-    if(SEGS.length&&isMobile()) setTab("segs");
+    if(auto){
+      const prs=SEGS.filter(s=>s.timed&&s.efforts[0]&&announce.has(s.efforts[0].name)).map(s=>s.name);
+      if(prs.length) toast(prs.length===1?"🎉 New PR on "+prs[0]
+        :"🎉 "+prs.length+" new PRs · "+prs.slice(0,2).join(", ")+(prs.length>2?"…":""));
+      // no toast when nothing new — leave the "rides loaded" toast visible
+    }else{
+      toast(SEGS.length?SEGS.length+" segment"+(SEGS.length>1?"s":"")+" found":"No repeated sections — loosen params");
+      if(SEGS.length&&isMobile()) setTab("segs");
+    }
     save();
   },30);
 }
@@ -1146,16 +1241,24 @@ function renderSegPane(){
     return;
   }
   el.innerHTML="";
-  SEGS.forEach((s,i)=>{
-    const best=s.timed?s.efforts[0]:null;
+  // group by geographic area (Tahoe / Bay Area / …) when rides span more than one
+  const byArea={};
+  SEGS.forEach((s,i)=>{ const a=segArea(s); (byArea[a]||(byArea[a]=[])).push(i); });
+  const areas=Object.keys(byArea).sort(), multi=areas.length>1;
+  const renderCard=(i)=>{
+    const s=SEGS[i], best=s.timed?s.efforts[0]:null;
     const subTag=(s.splits&&s.splits.length)?`<span class="tag">${s.splits.length+1} parts</span>`:"";
     const d=document.createElement("div");d.className="seg"+(i===SEL?" active":"");
     d.innerHTML=`<div class="top"><span class="name">${escapeHtml(s.name)}</span>
       <span class="tag">${s.efforts.length} rides</span></div>
       <div class="meta"><span>${fmtDist(s.dist)}</span><span>↑${fmtEle(s.up)}</span>
       ${best?`<span class="b">best ${fmtTime(best.time)}</span>`:`<span>untimed</span>`}${subTag}</div>`;
-    d.onclick=()=>selectSeg(i);
-    el.appendChild(d);
+    d.onclick=()=>selectSeg(i); el.appendChild(d);
+  };
+  areas.forEach(a=>{
+    if(multi){ const h=document.createElement("div"); h.className="area-hd";
+      h.innerHTML=`<span>${escapeHtml(a)}</span><span class="n">${byArea[a].length}</span>`; el.appendChild(h); }
+    byArea[a].forEach(renderCard);
   });
 }
 function selectSeg(i){ if(SEL!==i)splitMode=false; RSEL=-1;
@@ -1191,16 +1294,22 @@ function renderRideDetail(el,r){
   $("backRide").onclick=()=>{RSEL=-1;drawRides();renderSegPane();};
 }
 
+function latestEffort(efforts){
+  let best=null,bt=-Infinity;
+  efforts.forEach(e=>{const d=effortDateMs(e); if(d!=null&&d>bt){bt=d;best=e;}});
+  return best;
+}
 function leaderboardTable(efforts,timed){
-  const best=timed?efforts[0]:null;
+  const best=timed?efforts[0]:null, latest=latestEffort(efforts);
   const rows=efforts.map((e,i)=>{
     const isBest=timed&&i===0;
     const pct=timed&&e.time?Math.max(10,Math.round((best.time/e.time)*100)):0;
     const delta=timed?(isBest?"PR":"+"+fmtTime(e.time-best.time)):"";
+    const dms=effortDateMs(e);
     return `<div class="lb-row${isBest?" best":""}">
       <span class="lb-bar" style="width:${pct}%"></span>
       <span class="lb-rank">${timed?(i+1):"–"}</span>
-      <span class="lb-name">${escapeHtml(e.name)}</span>
+      <span class="lb-name"><span class="lb-nm-text">${escapeHtml(e.name)}</span>${dms!=null?`<i class="lb-date">${fmtDateShort(dms)}</i>`:""}${e===latest&&efforts.length>1?`<span class="lb-latest">latest</span>`:""}</span>
       <span class="lb-time">${fmtTime(e.time)}</span>
       <span class="lb-delta${isBest?" pr":""}">${delta}</span>
       <span class="lb-speed">${fmtKmh(e.speed)}<i>${speedUnit()}</i></span>
@@ -1208,20 +1317,68 @@ function leaderboardTable(efforts,timed){
   }).join("");
   return `<div class="lb">${rows}</div>`;
 }
+/* #1 personal-progress summary: PR, latest vs PR, standing, trend */
+function progressSummary(efforts,timed){
+  if(!timed) return "";
+  const best=efforts[0], total=efforts.filter(e=>e.time!=null).length;
+  const dated=efforts.filter(e=>e.time!=null&&effortDateMs(e)!=null).sort((a,b)=>effortDateMs(a)-effortDateMs(b));
+  let latestRow="";
+  if(dated.length){
+    const latest=dated[dated.length-1], isPR=latest.time<=best.time, dv=latest.time-best.time;
+    latestRow=`<div class="prog-row"><span>Latest · ${fmtDateShort(effortDateMs(latest))}</span>
+      <b class="${isPR?"pr":""}">${fmtTime(latest.time)} ${isPR?"🎉 PR":"("+(dv>0?"+":"")+fmtTime(dv)+")"}</b></div>`;
+  }
+  const beat=dated.length?efforts.filter(e=>e.time!=null&&e.time>dated[dated.length-1].time).length:0;
+  const standing=(dated.length&&total>1)?`<div class="prog-row"><span>Standing</span><b>faster than ${beat} of ${total}</b></div>`:"";
+  return `<div class="prog">
+    <div class="prog-row"><span>Your best (PR)</span><b>${fmtTime(best.time)}${effortDateMs(best)!=null?" · "+fmtDateShort(effortDateMs(best)):""}</b></div>
+    ${latestRow}${standing}${trendSpark(dated)}
+  </div>`;
+}
+function trendSpark(dated){
+  if(dated.length<2) return "";
+  const w=312,h=44,pad=5, times=dated.map(e=>e.time);
+  const mn=Math.min(...times), mx=Math.max(...times), rg=(mx-mn)||1;
+  const X=i=>pad+(i/(dated.length-1))*(w-2*pad);
+  const Y=t=>pad+((t-mn)/rg)*(h-2*pad);            // faster (lower time) = higher on chart
+  const line=dated.map((e,i)=>X(i).toFixed(1)+","+Y(e.time).toFixed(1)).join(" ");
+  const dots=dated.map((e,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(e.time).toFixed(1)}" r="${e.time===mn?3.2:2.2}" fill="${e.time===mn?"#15A05B":"#5B5BD6"}"/>`).join("");
+  return `<svg class="spark trend" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline points="${line}" fill="none" stroke="#5B5BD6" stroke-width="1.5" opacity=".65"/>${dots}</svg>`;
+}
+/* #3 latest run, part by part vs your best on each part */
+function splitDeltaStrip(s){
+  const dated=s.efforts.filter(e=>e.time!=null&&effortDateMs(e)!=null).sort((a,b)=>effortDateMs(a)-effortDateMs(b));
+  if(!dated.length) return "";
+  const latestName=dated[dated.length-1].name, when=fmtDateShort(effortDateMs(dated[dated.length-1]));
+  const subs=subSegments(s);
+  const cells=subs.map(sub=>{
+    const name=escapeHtml(sub.name);
+    if(!sub.timed) return `<span class="pd"><i>${name}</i>—</span>`;
+    const bestP=sub.efforts[0], mine=sub.efforts.find(e=>e.name===latestName);
+    if(!mine||mine.time==null) return `<span class="pd"><i>${name}</i>—</span>`;
+    const d=mine.time-bestP.time, isPR=mine===bestP||d<=0;
+    return `<span class="pd ${isPR?"pr":(d>0?"slow":"")}"><i>${name}</i>${isPR?"PR":(d>0?"+":"")+fmtTime(d)}</span>`;
+  }).join("");
+  return `<div class="part-delta"><div class="pd-h">Latest run vs your best, part by part · ${when}</div>
+    <div class="pd-row">${cells}</div></div>`;
+}
 function renderDetail(el,s){
   const hasSplits=s.splits&&s.splits.length>0;
+  const prog=progressSummary(s.efforts,s.timed);
   let body;
   if(hasSplits){
     const subs=subSegments(s);
-    body=subs.map(sub=>`<div class="sub">
+    const subBody=subs.map(sub=>`<div class="sub">
       <div class="shd">
         <span class="swatch" style="background:${SUBCOLORS[sub.k%SUBCOLORS.length]}"></span>
         <input class="sname" data-k="${sub.k}" value="${escapeHtml(sub.name)}" />
         ${sub.timed?`<span class="sbest">best ${fmtTime(sub.efforts[0].time)}</span>`:""}
       </div>
       ${leaderboardTable(sub.efforts,sub.timed)}</div>`).join("");
+    body=prog+(s.timed?splitDeltaStrip(s):"")+subBody;
   }else{
-    body=(s.timed?spark(s):"")+leaderboardTable(s.efforts,s.timed);
+    body=prog+(s.timed?spark(s):"")+leaderboardTable(s.efforts,s.timed);
   }
   el.innerHTML=`<div class="detail">
     <div class="hd">
