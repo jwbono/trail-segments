@@ -319,6 +319,15 @@
   .pd i{font-style:normal;font-family:var(--sans);font-size:10px;font-weight:500;color:var(--muted)}
   .pd.pr{color:var(--pos);border-color:var(--pos-soft)}
   .pd.slow{color:var(--warm)}
+
+  /* backup state */
+  .backup-state{display:flex;align-items:center;gap:8px;font-family:var(--sans);font-size:12px;
+    color:var(--muted);padding:2px 2px 10px}
+  .bk-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--line-2)}
+  .bk-dot.ok{background:var(--pos)} .bk-dot.dirty{background:var(--warm)} .bk-dot.idle{background:var(--line-2)}
+  .autobk{display:flex;align-items:center;gap:8px;font-family:var(--sans);font-size:12.5px;
+    color:var(--muted);cursor:pointer;padding:8px 2px}
+  .autobk input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
 </style>
 </head>
 <body class="tab-map">
@@ -372,20 +381,17 @@
     </div>
     <button class="run-btn" id="runBtn" disabled>Detect segments</button>
 
-    <div class="sec-label">Sync to repo <span class="n">☁</span></div>
+    <div class="sec-label">Backup <span class="n">☁</span></div>
     <div class="sync">
-      <select id="riderSelect" class="tin"></select>
-      <input id="riderNew" class="tin" placeholder="New rider name" autocomplete="off" style="display:none">
+      <div id="backupState" class="backup-state"></div>
       <div class="syncbtns">
-        <button class="tbtn" id="saveRepo">⇧ Save rides</button>
-        <button class="tbtn" id="loadRepo">↻ Reload all</button>
+        <button class="tbtn" id="backupNow">⇧ Back up now</button>
+        <button class="tbtn" id="restoreRepo">↻ Restore</button>
       </div>
-      <div class="syncbtns">
-        <button class="tbtn" id="saveSegs">⇧ Save segments + cuts</button>
-      </div>
-      <details class="tokwrap"><summary>GitHub token (needed to save)</summary>
+      <label class="autobk"><input type="checkbox" id="autoBackup"> Auto-backup after changes</label>
+      <details class="tokwrap"><summary>GitHub token (needed to back up)</summary>
         <input id="ghToken" class="tin" type="password" placeholder="github_pat_…" autocomplete="off">
-        <div class="hint">Saved only in this browser — never written to the repo. Use a fine-grained token scoped to this repo with Contents: read/write. Rides synced here are public.</div>
+        <div class="hint">Stored only in this browser — never written to the repo. Use a fine-grained token scoped to this repo with Contents: read/write. Everything backs up to <code>data/backup.json</code>.</div>
       </details>
       <div id="syncStatus" class="hint"></div>
     </div>
@@ -423,9 +429,9 @@
       <li><b>Split (optional).</b> Open a segment, choose <b>Split into sub-segments</b>, and click
         the highlighted trail to drop cuts — each part gets its own ranking.</li>
       <li><b>Units.</b> Toggle <b>Metric / Imperial</b> in the top bar anytime.</li>
-      <li><b>Share (optional).</b> Add a GitHub token, pick your rider name, then <b>Save rides</b> /
-        <b>Save segments</b> to sync through the repo. Friends press <b>Reload all</b> to pull
-        everyone's rides.</li>
+      <li><b>Back up (optional).</b> Add a GitHub token, then <b>Back up now</b> to save all your
+        rides and segments to the repo (or turn on <b>Auto-backup</b>). <b>Restore</b> brings
+        everything back on a new device or after clearing your browser.</li>
     </ol>
     <div class="qs-foot">
       <button class="tbtn" id="qsDemo">Load demo rides</button>
@@ -758,12 +764,20 @@ function unpackSeg(o){return {name:o.name,dist:o.dist,up:o.up,down:o.down,timed:
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
 function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
+// lightweight signature of current data, to tell whether it differs from the last backup
+function dataSig(){
+  let s="r"+RIDES.length+"s"+SEGS.length;
+  RIDES.forEach(r=>{ s+="|"+(r.name||"")+":"+r.raw.length+":"+((r.tags||[]).join(","))+":"+(r.rider||""); });
+  SEGS.forEach(g=>{ s+="#"+(g.name||"")+":"+((g.splits||[]).length)+":"+g.efforts.length; });
+  return s;
+}
 let _saveT=null;
 function save(){ clearTimeout(_saveT); _saveT=setTimeout(()=>{
   try{ lsSet("contour:rides",JSON.stringify(RIDES.map(r=>
     ({name:r.name,rider:r.rider||"",tags:r.tags||[],raw:packRaw(r.raw)})))); }catch(e){}
   try{ const sp=JSON.stringify(SEGS.map(packSeg));
     if(sp.length<4500000) lsSet("contour:segs",sp); else lsDel("contour:segs"); }catch(e){}
+  renderBackupState(); scheduleAutoBackup();
 },400); }
 function clearStore(){ lsDel("contour:rides"); lsDel("contour:segs"); }
 function loadLocal(){
@@ -774,15 +788,15 @@ function loadLocal(){
 function load(){
   loadLocal();
   const tk=$("ghToken"); if(tk)tk.value=lsGet("contour:token")||"";
+  if($("autoBackup"))$("autoBackup").checked=autoBackupOn();
   if($("unitBtn"))$("unitBtn").textContent=isImp()?"Imperial":"Metric";
   updateParamLabels();
-  populateRiderSelect();
   if(RIDES.length){ if(!ORIGIN)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
     renderRides();drawRides();fitAll();$("runBtn").disabled=activeRideCount()<2; }
   else renderRides();
   if(SEGS.length){drawSegs();renderSegPane();}
-  refreshRiders();
-  if(!RIDES.length) loadFromRepo(true);   // fresh device / friend: pull shared data
+  renderBackupState();
+  if(!RIDES.length) restoreFromRepo(true);   // fresh device: pull your backup
   if(!lsGet("contour:qs")) openQuickStart();   // first visit: show the guide
 }
 
@@ -792,12 +806,6 @@ function repoInfo(){
   try{ const h=location.hostname, p=location.pathname.split("/").filter(Boolean);
     if(h.endsWith("github.io")){ owner=h.split(".")[0]; if(p[0])repo=p[0]; } }catch(e){}
   return {owner,repo};
-}
-function currentRider(){
-  const sel=$("riderSelect");
-  if(sel){ if(sel.value==="__new__"){const v=(($("riderNew")&&$("riderNew").value)||"").trim();return v||"Me";}
-    return sel.value||"Me"; }
-  return (lsGet("contour:rider")||"Me");
 }
 function getToken(){ return (($("ghToken")&&$("ghToken").value)||lsGet("contour:token")||"").trim(); }
 function setSyncStatus(m){ const e=$("syncStatus"); if(e)e.textContent=m; }
@@ -820,77 +828,74 @@ async function ghPutFile(o,repo,path,obj,msg,token,sha){
   if(!r.ok){const t=await r.text();throw new Error(r.status+" "+t.slice(0,140));}
   return await r.json();
 }
-async function saveSegments(){
+/* ---------- backup state ---------- */
+let lastBackup=lsGet("contour:backupAt")||null;
+function autoBackupOn(){ return lsGet("contour:autobackup")==="1"; }
+function isDirty(){ return (RIDES.length||SEGS.length) && dataSig()!==(lsGet("contour:backupSig")||"\0"); }
+function fmtAgo(iso){ if(!iso)return ""; const ms=Date.now()-Date.parse(iso);
+  if(isNaN(ms))return ""; if(ms<60000)return "just now"; const m=Math.round(ms/60000);
+  if(m<60)return m+" min ago"; const h=Math.round(m/60); if(h<24)return h+"h ago"; return Math.round(h/24)+"d ago"; }
+function renderBackupState(){
+  const el=$("backupState"); if(!el)return;
+  if(!RIDES.length&&!SEGS.length){ el.innerHTML=`<span class="bk-dot idle"></span>Nothing to back up yet`; return; }
+  if(isDirty()){ el.innerHTML=`<span class="bk-dot dirty"></span>Unsaved changes`+(lastBackup?` · last backup ${fmtAgo(lastBackup)}`:` · not backed up yet`); return; }
+  el.innerHTML=`<span class="bk-dot ok"></span>Backed up ✓${lastBackup?` · ${fmtAgo(lastBackup)}`:""}`;
+}
+let _autoBkT=null;
+function scheduleAutoBackup(){ clearTimeout(_autoBkT);
+  _autoBkT=setTimeout(()=>{ if(autoBackupOn()&&getToken()&&isDirty()) backupNow(true); }, 6000); }
+
+/* ---------- backup: everything (rides + segments) to one repo file ---------- */
+async function backupNow(auto){
   const {owner,repo}=repoInfo(), token=getToken();
-  if(!token){ setSyncStatus("Add a GitHub token below to save."); toast("No token set"); return; }
-  if(!SEGS.length){ toast("No segments — run Detect first"); return; }
-  setSyncStatus("Saving "+SEGS.length+" segments…");
+  if(!token){ setSyncStatus("Add a GitHub token below to back up."); if(!auto)toast("No token set"); renderBackupState(); return; }
+  if(!RIDES.length&&!SEGS.length){ if(!auto)toast("Nothing to back up"); return; }
+  setSyncStatus(auto?"Auto-backing up…":`Backing up ${RIDES.length} rides + ${SEGS.length} segments…`);
   try{
-    const ex=await ghGetFile(owner,repo,"data/segments.json",token);
-    await ghPutFile(owner,repo,"data/segments.json",
-      {updated:new Date().toISOString(),segments:SEGS.map(packSeg)},
-      "Update segments",token,ex&&ex.sha);
-    setSyncStatus("Saved ✓ "+SEGS.length+" segments");
-    toast("Segments synced to repo");
-  }catch(e){ setSyncStatus("Error: "+e.message); toast("Save failed"); }
+    const payload={updated:new Date().toISOString(),
+      rides:RIDES.map(r=>({name:r.name,rider:r.rider||"",tags:r.tags||[],raw:packRaw(r.raw)})),
+      segments:SEGS.map(packSeg)};
+    const ex=await ghGetFile(owner,repo,"data/backup.json",token);
+    await ghPutFile(owner,repo,"data/backup.json",payload,
+      `Backup ${RIDES.length} rides, ${SEGS.length} segments`,token,ex&&ex.sha);
+    lastBackup=payload.updated; lsSet("contour:backupAt",lastBackup); lsSet("contour:backupSig",dataSig());
+    renderBackupState(); setSyncStatus(`Backed up ✓ ${RIDES.length} rides + ${SEGS.length} segments`);
+    if(!auto)toast("Backed up ✓");
+  }catch(e){ setSyncStatus("Backup failed: "+e.message); if(!auto)toast("Backup failed"); }
 }
-async function loadSegmentsFromRepo(){
-  const segf=await fetchJSON("data/segments.json?t="+Date.now());
-  if(segf&&Array.isArray(segf.segments)){
-    SEGS=segf.segments.map(unpackSeg); SEL=-1; splitMode=false;
-    drawSegs(); renderSegPane(); save();
-    return SEGS.length;
+function applyRestored(rides,segs){
+  RIDES=rides; SEGS=segs||[]; SEL=-1; RSEL=-1; splitMode=false; ORIGIN=null;
+  if(RIDES.length)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
+  renderRides();drawRides();drawSegs();renderSegPane();fitAll();updateRunBtn();
+  lsSet("contour:backupSig",dataSig()); renderBackupState(); save();
+}
+async function restoreFromRepo(autoOnLoad){
+  // preferred: single backup file
+  const bk=await fetchJSON("data/backup.json?t="+Date.now());
+  if(bk&&Array.isArray(bk.rides)){
+    applyRestored(
+      bk.rides.map(o=>({name:o.name,rider:o.rider||"",tags:o.tags||[],raw:unpackRaw(o.raw)})),
+      Array.isArray(bk.segments)?bk.segments.map(unpackSeg):[]);
+    lastBackup=bk.updated||lastBackup; lsSet("contour:backupAt",lastBackup||""); renderBackupState();
+    if(!autoOnLoad){ setSyncStatus(`Restored ${RIDES.length} rides + ${SEGS.length} segments`); toast("Restored from backup"); }
+    return true;
   }
-  return 0;
+  return legacyRestore(autoOnLoad);   // older repos: manifest + per-rider files
 }
-async function syncToRepo(){
-  const {owner,repo}=repoInfo(), rider=currentRider(), token=getToken();
-  if(!token){ setSyncStatus("Add a GitHub token below to save."); toast("No token set"); return; }
-  // save rides already tagged with this rider, plus any unclaimed local rides
-  // ("Me"/untagged demo or freshly-added rides) — claim those under this name.
-  const mine=RIDES.filter(r=>{const rr=r.rider||"Me"; return rr===rider||rr==="Me";});
-  if(!mine.length){ toast("No rides to save — add rides first"); return; }
-  let claimed=false;
-  mine.forEach(r=>{ if((r.rider||"Me")!==rider){ r.rider=rider; claimed=true; } });
-  if(claimed){ renderRides(); drawRides(); save(); }
-  setSyncStatus("Saving "+mine.length+" rides as "+rider+"…");
-  try{
-    const path="data/rides/"+encodeURIComponent(rider)+".json";
-    const ex=await ghGetFile(owner,repo,path,token);
-    await ghPutFile(owner,repo,path,
-      {rider,updated:new Date().toISOString(),rides:mine.map(r=>({name:r.name,tags:r.tags||[],raw:packRaw(r.raw)}))},
-      "Update rides for "+rider,token,ex&&ex.sha);
-    let man={riders:[]}, msha=null;
-    const mx=await ghGetFile(owner,repo,"data/manifest.json",token);
-    if(mx){ msha=mx.sha; try{man=JSON.parse(unb64(mx.content));}catch(e){} }
-    if(!Array.isArray(man.riders))man.riders=[];
-    if(!man.riders.includes(rider))man.riders.push(rider);
-    man.updated=new Date().toISOString();
-    await ghPutFile(owner,repo,"data/manifest.json",man,"Update manifest",token,msha);
-    setSyncStatus("Saved ✓ "+mine.length+" rides as "+rider);
-    toast("Synced to repo");
-    refreshRiders().then(()=>{ const s=$("riderSelect"); if(s){s.value=rider;toggleNewInput();} });
-  }catch(e){ setSyncStatus("Error: "+e.message); toast("Sync failed"); }
-}
-async function loadFromRepo(auto){
+async function legacyRestore(auto){
   const man=await fetchJSON("data/manifest.json?t="+Date.now());
-  if(!man||!Array.isArray(man.riders)||!man.riders.length){ if(!auto)toast("No shared rides in repo yet"); return; }
-  const newRides=[]; let loaded=0;
+  if(!man||!Array.isArray(man.riders)||!man.riders.length){ if(!auto)toast("No backup found in repo yet"); return false; }
+  const rides=[]; let loaded=0;
   for(const rd of man.riders){
     const f=await fetchJSON("data/rides/"+encodeURIComponent(rd)+".json?t="+Date.now());
-    if(f&&Array.isArray(f.rides)) f.rides.forEach(x=>{ newRides.push({name:x.name,rider:rd,tags:x.tags||[],raw:unpackRaw(x.raw)}); loaded++; });
+    if(f&&Array.isArray(f.rides)) f.rides.forEach(x=>{ rides.push({name:x.name,rider:rd,tags:x.tags||[],raw:unpackRaw(x.raw)}); loaded++; });
   }
-  if(!loaded){ if(!auto)toast("Repo has no rides"); return; }
-  const repoRiders=new Set(man.riders);
-  KNOWN_RIDERS=man.riders.slice();
-  RIDES=RIDES.filter(r=>!repoRiders.has(r.rider||"Me")).concat(newRides);
-  if(!ORIGIN&&RIDES.length)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
-  populateRiderSelect();
-  renderRides();drawRides();fitVisible();$("runBtn").disabled=activeRideCount()<2;
-  setSyncStatus("Loaded "+loaded+" rides from repo ("+man.riders.length+" rider"+(man.riders.length>1?"s":"")+")");
-  const nseg=await loadSegmentsFromRepo();
-  if(nseg) setSyncStatus("Loaded "+loaded+" rides + "+nseg+" segments from repo");
-  if(!auto)toast("Loaded "+loaded+" rides"); save();
+  if(!loaded){ if(!auto)toast("No backup found in repo yet"); return false; }
+  const segf=await fetchJSON("data/segments.json?t="+Date.now());
+  const segs=(segf&&Array.isArray(segf.segments))?segf.segments.map(unpackSeg):[];
+  applyRestored(rides,segs);
+  if(!auto)toast(`Restored ${loaded} rides`+(segs.length?` + ${segs.length} segments`:""));
+  return true;
 }
 
 /* ---------- state + map ---------- */
@@ -919,7 +924,6 @@ function removeTagFromRide(i,t){ const r=RIDES[i]; r.tags=(r.tags||[]).filter(x=
 
 /* ---------- rider / tag / text filtering ---------- */
 function presentRiders(){return [...new Set(RIDES.map(r=>r.rider||"Me"))];}
-function allKnownRiders(){return [...new Set([...KNOWN_RIDERS,...presentRiders()])].sort();}
 function isRiderShown(name){return RIDER_FILTER===null||RIDER_FILTER.has(name);}
 function rideVisible(r){
   if(!isRiderShown(r.rider||"Me")) return false;
@@ -972,23 +976,6 @@ function renderRiderChips(){
     const t=c.dataset.t; if(t==="__all__")TAG_FILTER=null; else toggleTag(t);
     renderRides();drawRides();fitVisible(); });
 }
-function populateRiderSelect(){
-  const sel=$("riderSelect"); if(!sel)return;
-  const cur=lsGet("contour:rider")||"", riders=allKnownRiders();
-  sel.innerHTML=riders.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join("")
-    +`<option value="__new__">+ New rider…</option>`;
-  if(cur&&riders.includes(cur)) sel.value=cur;
-  else if(riders.length) sel.value=riders[0];
-  else sel.value="__new__";
-  toggleNewInput();
-}
-function toggleNewInput(){const sel=$("riderSelect"),nw=$("riderNew");
-  if(sel&&nw) nw.style.display=sel.value==="__new__"?"block":"none";}
-async function refreshRiders(){
-  const man=await fetchJSON("data/manifest.json?t="+Date.now());
-  if(man&&Array.isArray(man.riders)) KNOWN_RIDERS=man.riders.slice();
-  populateRiderSelect();
-}
 
 function initMap(){
   map=L.map("map",{zoomControl:true,tap:true}).setView([38.86,-120.0],12);
@@ -1015,7 +1002,7 @@ function addRides(files){
   const parsed=[];
   [...files].forEach(f=>{const rd=new FileReader();
     rd.onload=()=>{ try{const r=parseGPX(rd.result,f.name.replace(/\.gpx$/i,""));
-        r.rider=currentRider(); r.tags=[]; parsed.push(r);}
+        r.rider=""; r.tags=[]; parsed.push(r);}
       catch(e){toast("Skipped "+f.name+": "+e.message);}
       if(--pend===0) commitParsed(parsed); };
     rd.readAsText(f);});
@@ -1487,13 +1474,11 @@ $("qsOverlay").onclick=e=>{ if(e.target===$("qsOverlay")) closeQuickStart(); };
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"&&$("qsOverlay").classList.contains("show")) closeQuickStart(); });
 
-$("saveRepo").onclick=syncToRepo;
-$("saveSegs").onclick=saveSegments;
-$("loadRepo").onclick=()=>loadFromRepo(false);
-$("riderSelect").onchange=()=>{toggleNewInput();
-  if($("riderSelect").value!=="__new__")lsSet("contour:rider",$("riderSelect").value);};
-$("riderNew").oninput=()=>lsSet("contour:rider",$("riderNew").value.trim());
-$("ghToken").oninput=()=>lsSet("contour:token",$("ghToken").value.trim());
+$("backupNow").onclick=()=>backupNow(false);
+$("restoreRepo").onclick=()=>restoreFromRepo(false);
+$("autoBackup").onchange=()=>{ lsSet("contour:autobackup",$("autoBackup").checked?"1":"0");
+  if($("autoBackup").checked&&getToken()&&isDirty()) backupNow(true); renderBackupState(); };
+$("ghToken").oninput=()=>{ lsSet("contour:token",$("ghToken").value.trim()); renderBackupState(); };
 
 load();
 </script>

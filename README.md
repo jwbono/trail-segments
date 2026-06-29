@@ -73,23 +73,27 @@ your unit choice.
 
 ---
 
-## Syncing with the repo (optional)
+## Backup (optional, recommended)
 
-Sharing is opt-in and uses this GitHub repository as the backing store.
+Your rides and segments live in the browser's `localStorage` — which is wiped if
+you clear browser data or switch devices. **Backup** copies everything into this
+GitHub repository so it's safe and follows you across devices.
 
 1. Create a **fine-grained GitHub token** scoped to this repo with
    **Contents: read/write**.
-2. In the app, open **GitHub token (needed to save)** and paste it. The token is
-   stored only in your browser and is never written to the repo.
-3. Pick your **rider name** (or add a new one).
-4. **Save rides** writes your rides to `data/rides/<name>.json` and updates
-   `data/manifest.json`. **Save segments + cuts** writes the detected segments to
-   `data/segments.json`.
-5. Anyone opening the app can press **Reload all** to pull every rider's shared
-   rides and segments.
+2. In the app, open **GitHub token (needed to back up)** and paste it. The token
+   is stored only in your browser and is never written to the repo.
+3. Press **Back up now** to write all your rides and segments to a single
+   `data/backup.json`, or tick **Auto-backup after changes** to do it
+   automatically a few seconds after each change.
+4. The backup status line shows whether you're up to date (`Backed up ✓`) or have
+   `Unsaved changes`.
+5. **Restore** pulls `data/backup.json` back into the app — and a fresh device
+   (or browser with no local data) restores from it automatically on first load.
 
-> Note: rides synced this way are public — anyone who can see the repo can see
-> them.
+> Note: the repo is public, so anything you back up is publicly visible.
+> Older repos that used the per-rider `data/rides/<name>.json` + `data/manifest.json`
+> layout are still restored automatically as a fallback.
 
 ---
 
@@ -104,7 +108,7 @@ python3 -m http.server 8000
 ```
 
 Opening `index.html` directly via `file://` mostly works, but serving over HTTP
-is recommended so the relative `data/` sync requests behave the same as on
+is recommended so the relative `data/` backup requests behave the same as on
 GitHub Pages.
 
 External dependencies are loaded from CDNs at runtime: **Leaflet** (map) and
@@ -117,7 +121,7 @@ for the map to render.
 
 - Rides and detected segments are cached in your browser's `localStorage`
   (`contour:*` keys). **Clear all** removes them.
-- Nothing leaves your browser unless you use the sync buttons with a token.
+- Nothing leaves your browser unless you use **Back up** (with a token).
 - GPX parsing, segment detection, and all stats run entirely client-side.
 
 ---
@@ -126,7 +130,8 @@ for the map to render.
 
 ```
 index.html              The entire app (markup, styles, logic)
-data/manifest.json      List of riders who have shared rides
-data/rides/<name>.json  Per-rider shared rides (created on sync)
-data/segments.json      Shared detected segments (created on sync)
+data/backup.json        Your backed-up rides + segments (created by Back up)
+data/manifest.json      Legacy: list of riders (older per-rider layout)
+data/rides/<name>.json  Legacy: per-rider rides (restored as a fallback)
+data/segments.json      Legacy: detected segments (restored as a fallback)
 ```
