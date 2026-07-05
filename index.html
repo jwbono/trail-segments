@@ -531,13 +531,20 @@ function matchPair(A,gridB,B,radius,cell,minLen,step){
       if(!cur){cur={a0:i,a1:i,b0:pick,b1:pick,lastJ:pick};}
       else{cur.a1=i;cur.b1=pick;cur.lastJ=Math.max(cur.lastJ,pick);}
       miss=0;
-    }else if(cur){ if(++miss>maxMiss){closeRun(cur,A,minLen,runs);cur=null;} }
+    }else if(cur){ if(++miss>maxMiss){closeRun(cur,A,B,minLen,runs);cur=null;} }
   }
-  if(cur)closeRun(cur,A,minLen,runs);
+  if(cur)closeRun(cur,A,B,minLen,runs);
   return runs;
 }
 function spanDist(P,i0,i1){let d=0;for(let i=i0+1;i<=i1;i++)d+=hav(P[i-1],P[i]);return d;}
-function closeRun(c,A,minLen,runs){ if(spanDist(A,c.a0,c.a1)>=minLen) runs.push(c); }
+function closeRun(c,A,B,minLen,runs){
+  const aD=spanDist(A,c.a0,c.a1); if(aD<minLen) return;
+  // a real co-traversal covers ~equal distance on both rides; reject lopsided
+  // matches (out-and-back / loop overlaps where one index races ahead)
+  const bD=spanDist(B,c.b0,c.b1), lo=Math.min(aD,bD), hi=Math.max(aD,bD);
+  if(hi>lo*1.6) return;
+  runs.push(c);
+}
 
 /* ---------- union-find ---------- */
 function makeUF(){const p={};return{
