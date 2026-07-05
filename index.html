@@ -1207,14 +1207,14 @@ function drawSegs(){
         const pl=L.polyline(slice,{color:SUBCOLORS[k%SUBCOLORS.length],weight:6,opacity:1})
           .addTo(map).bindTooltip(((s.subNames&&s.subNames[k])||("Part "+(k+1))),
             {sticky:true,className:"seg-tip"});
-        pl.on("click",()=>selectSeg(i));
+        pl.on("click",e=>{ if(splitMode){L.DomEvent.stop(e); addSplitAt(e.latlng);} else selectSeg(i); });
         segLayers.push(pl);
       }
     }else{
       const pl=L.polyline(s.geom.map(p=>[p.lat,p.lon]),
         {color:active?"#5B5BD6":"#B9BAEC",weight:active?6:4,opacity:active?1:.85})
         .addTo(map).bindTooltip(s.name+" · "+fmtDist(s.dist),{sticky:true,className:"seg-tip"});
-      pl.on("click",()=>selectSeg(i));
+      pl.on("click",e=>{ if(splitMode&&i===SEL){L.DomEvent.stop(e); addSplitAt(e.latlng);} else selectSeg(i); });
       segLayers.push(pl);
     }
   });
@@ -1240,16 +1240,18 @@ function drawSegs(){
 }
 function reindexSubNames(s){ s.subNames={}; } // names are positional; reset on structural change
 
-function onMapClick(e){
-  if(!splitMode||SEL<0) return;
-  const s=SEGS[SEL], click={lat:e.latlng.lat,lon:e.latlng.lng};
+function addSplitAt(latlng){
+  if(SEL<0) return;
+  const s=SEGS[SEL], click={lat:latlng.lat,lon:latlng.lng};
   const gi=nearestIdx(s.geom,click), gp=s.geom[gi];
-  if(hav(gp,click)>60){ toast("Click on the highlighted trail"); return; }
+  if(hav(gp,click)>60){ toast("Tap on the highlighted trail"); return; }
   // avoid near-duplicate
   if((s.splits||[]).some(c=>hav(c,gp)<15)){ toast("Already a split there"); return; }
   s.splits=s.splits||[]; s.splits.push({lat:gp.lat,lon:gp.lon});
   reindexSubNames(s); drawSegs(); renderSegPane(); save();
 }
+// map background tap (when the tap misses the line) also drops a split in split mode
+function onMapClick(e){ if(splitMode&&SEL>=0) addSplitAt(e.latlng); }
 
 /* ---------- right panel ---------- */
 function renderSegPane(){
