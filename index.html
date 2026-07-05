@@ -612,15 +612,19 @@ function detect(rides,opt){
     let rep=members[0],repLen=-1; const efforts=[];
     for(const u of members){
       const m=segMeta[u], P=R2[m.ride].P, ranges=keptRanges(m.i0,m.i1,m.skips);
-      // build the effort from only the co-ridden ranges, excluding detour skips
-      const seg=[]; let dist=0,up=0,dn=0,time=0,haveT=true;
+      // build the effort from only the co-ridden ranges, excluding detour skips.
+      // time is MOVING time (stops excluded) so stopped time doesn't distort the
+      // comparison — matching how a solo rider judges "how well did I ride this".
+      const seg=[]; let dist=0,up=0,dn=0,mt=0,haveT=true;
       for(const [lo,hi] of ranges){
         for(let k=lo;k<=hi;k++) seg.push(cleanPt(P[k]));
-        for(let k=lo+1;k<=hi;k++){ dist+=hav(P[k-1],P[k]); if(P[k].ele!=null&&P[k-1].ele!=null){
-          const de=P[k].ele-P[k-1].ele; if(de>0)up+=de;else dn+=de;}}
-        const a=P[lo],z=P[hi]; if(a.t!=null&&z.t!=null) time+=(z.t-a.t)/1000; else haveT=false;
+        for(let k=lo+1;k<=hi;k++){ const d=hav(P[k-1],P[k]); dist+=d;
+          if(P[k].ele!=null&&P[k-1].ele!=null){ const de=P[k].ele-P[k-1].ele; if(de>0)up+=de;else dn+=de; }
+          if(P[k].t!=null&&P[k-1].t!=null){ const dt=(P[k].t-P[k-1].t)/1000; if(dt>0&&d/dt>0.8) mt+=dt; }
+          else haveT=false;
+        }
       }
-      const t=haveT?time:null;
+      const t=haveT?mt:null;
       efforts.push({ride:m.ride,name:rides[m.ride].name,dist,time:t,
         speed:t?dist/t:null,up,down:dn,pts:seg});
       if(dist>repLen){repLen=dist;rep=u;}
