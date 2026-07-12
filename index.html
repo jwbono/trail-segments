@@ -553,6 +553,22 @@ function keptRanges(i0,i1,skips){
   if(i1>lo)out.push([lo,i1]);
   return out.length?out:[[i0,i1]];
 }
+// does interval m re-cover ground already covered by the attempt's pieces?
+// (repeat lap = same ground = separate attempt; detour-split = new ground = same attempt)
+// Sampled densely with a >60% majority: loops often share short stretches between
+// halves (parallel legs, common approaches), which must not read as a repeat.
+function coversSameGround(P,pieces,m){
+  const len=m.i1-m.i0, stride=Math.max(4,Math.floor(len/40));
+  let close=0,total=0;
+  for(let i=m.i0;i<=m.i1;i+=stride){
+    total++; let best=Infinity;
+    for(const pc of pieces) for(let k=pc.i0;k<=pc.i1;k+=4){
+      const d=hav(P[k],P[i]); if(d<best)best=d; if(best<50)break;
+    }
+    if(best<50) close++;
+  }
+  return total>0 && close/total>0.6;
+}
 function closeRun(c,A,B,minLen,runs){
   const aD=spanDist(A,c.a0,c.a1); if(aD<minLen) return;
   // a real co-traversal covers ~equal distance on both rides (excluding detours the
@@ -585,11 +601,17 @@ function detect(rides,opt){
   const R2=rides.map(r=>{const P=resample(r.raw,step);return {...r,P,grid:buildGrid(P,cell)};});
   const perRide=R2.map(()=>[]); const rawPairRuns=[];
   for(let a=0;a<R2.length;a++)for(let b=a+1;b<R2.length;b++){
-    const runs=matchPair(R2[a].P,R2[b].grid,R2[b].P,radius,cell,minLen,step);
-    for(const c of runs){
-      perRide[a].push({i0:c.a0,i1:c.a1,skips:[]});          // A ran continuously within the match
-      perRide[b].push({i0:c.b0,i1:c.b1,skips:c.skips||[]}); // B's detours are recorded as skips
+    // match BOTH directions: walking A follows one monotone chain through B and
+    // misses B's repeat laps; walking B catches them (duplicates merge later)
+    for(const c of matchPair(R2[a].P,R2[b].grid,R2[b].P,radius,cell,minLen,step)){
+      perRide[a].push({i0:c.a0,i1:c.a1,skips:[]});          // walker runs continuously within the match
+      perRide[b].push({i0:c.b0,i1:c.b1,skips:c.skips||[]}); // target-side detours recorded as skips
       rawPairRuns.push({a,am:{i0:c.a0,i1:c.a1}, b,bm:{i0:c.b0,i1:c.b1}});
+    }
+    for(const c of matchPair(R2[b].P,R2[a].grid,R2[a].P,radius,cell,minLen,step)){
+      perRide[b].push({i0:c.a0,i1:c.a1,skips:[]});
+      perRide[a].push({i0:c.b0,i1:c.b1,skips:c.skips||[]});
+      rawPairRuns.push({a,am:{i0:c.b0,i1:c.b1}, b,bm:{i0:c.a0,i1:c.a1}});
     }
   }
   const merged=perRide.map(mergeIntervals);
@@ -611,26 +633,40 @@ function detect(rides,opt){
     const members=clusters[root];
     const rideset=new Set(members.map(u=>segMeta[u].ride));
     if(rideset.size<minRides) continue;
-    let rep=members[0],repLen=-1; const efforts=[];
-    for(const u of members){
-      const m=segMeta[u], P=R2[m.ride].P, ranges=keptRanges(m.i0,m.i1,m.skips);
-      // build the effort from only the co-ridden ranges, excluding detour skips.
-      // time is MOVING time (stops excluded) so stopped time doesn't distort the
-      // comparison — matching how a solo rider judges "how well did I ride this".
-      const seg=[]; let dist=0,up=0,dn=0,mt=0,haveT=true;
-      for(const [lo,hi] of ranges){
-        for(let k=lo;k<=hi;k++) seg.push(cleanPt(P[k]));
-        for(let k=lo+1;k<=hi;k++){ const d=hav(P[k-1],P[k]); dist+=d;
-          if(P[k].ele!=null&&P[k-1].ele!=null){ const de=P[k].ele-P[k-1].ele; if(de>0)up+=de;else dn+=de; }
-          if(P[k].t!=null&&P[k-1].t!=null){ const dt=(P[k].t-P[k-1].t)/1000; if(dt>0&&d/dt>0.8) mt+=dt; }
-          else haveT=false;
-        }
+    // group each ride's intervals into ATTEMPTS: pieces covering different ground
+    // are one traversal split by a detour (combine them); pieces re-covering the
+    // same ground are separate attempts (out-and-back repeats).
+    const perRideM={};
+    members.forEach(u=>{const m=segMeta[u];(perRideM[m.ride]||(perRideM[m.ride]=[])).push(m);});
+    const efforts=[];
+    for(const rk in perRideM){
+      const r=+rk, P=R2[r].P;
+      const list=perRideM[rk].sort((a,b)=>a.i0-b.i0);
+      const attempts=[];
+      for(const m of list){
+        const last=attempts[attempts.length-1];
+        if(last&&!coversSameGround(P,last,m)) last.push(m);
+        else attempts.push([m]);
       }
-      const t=haveT?mt:null;
-      efforts.push({_u:u,ride:m.ride,name:rides[m.ride].name,dist,time:t,
-        speed:t?dist/t:null,up,down:dn,pts:seg});
-      if(dist>repLen){repLen=dist;rep=u;}
+      for(const pieces of attempts){
+        // build the effort from only the co-ridden ranges of every piece, excluding
+        // detour skips. time is MOVING time (stops excluded) so stopped time doesn't
+        // distort the comparison.
+        const seg=[]; let dist=0,up=0,dn=0,mt=0,haveT=true;
+        for(const m of pieces) for(const [lo,hi] of keptRanges(m.i0,m.i1,m.skips)){
+          for(let k=lo;k<=hi;k++) seg.push(cleanPt(P[k]));
+          for(let k=lo+1;k<=hi;k++){ const d=hav(P[k-1],P[k]); dist+=d;
+            if(P[k].ele!=null&&P[k-1].ele!=null){ const de=P[k].ele-P[k-1].ele; if(de>0)up+=de;else dn+=de; }
+            if(P[k].t!=null&&P[k-1].t!=null){ const dt=(P[k].t-P[k-1].t)/1000; if(dt>0&&d/dt>0.8) mt+=dt; }
+            else haveT=false;
+          }
+        }
+        const t=haveT?mt:null;
+        efforts.push({_pieces:pieces,_ride:r,ride:r,name:rides[r].name,dist,time:t,
+          speed:t?dist/t:null,up,down:dn,pts:seg});
+      }
     }
+    let repLen=-1; efforts.forEach(e=>{if(e.dist>repLen)repLen=e.dist;});
     // full-coverage rule: an effort only ranks if it covers ~the whole segment.
     // A ride that merely crossed or briefly joined the trail must not headline
     // the leaderboard with a short (fast-looking) partial pass.
@@ -644,12 +680,18 @@ function detect(rides,opt){
       else if(e.dist>cur.dist) byRide[e.ride]=e;}
     const finalE=Object.values(byRide);
     if(finalE.length<minRides) continue;   // needs minRides FULL traversals
-    rep=null;repLen=-1;
-    for(const e of full) if(e.dist>repLen){repLen=e.dist;rep=e._u;}
-    efforts.forEach(e=>delete e._u);
-    const repSeg=segMeta[rep], repP=R2[repSeg.ride].P, repGeom=[];
-    for(const [lo,hi] of keptRanges(repSeg.i0,repSeg.i1,repSeg.skips))
-      for(let k=lo;k<=hi;k++) repGeom.push(cleanPt(repP[k]));   // representative path with detours removed
+    // representative geometry: prefer a contiguous (single-piece) full effort so the
+    // drawn segment has no straight-line jump across a detour gap
+    let repE=null;
+    for(const e of full){ if(!repE)repE=e;
+      else{ const single=e._pieces.length===1, repSingle=repE._pieces.length===1;
+        if(single&&!repSingle&&e.dist>=repE.dist*0.95) repE=e;
+        else if(single===repSingle&&e.dist>repE.dist) repE=e; } }
+    repLen=repE.dist;
+    const repP=R2[repE._ride].P, repGeom=[];
+    for(const m of repE._pieces) for(const [lo,hi] of keptRanges(m.i0,m.i1,m.skips))
+      for(let k=lo;k<=hi;k++) repGeom.push(cleanPt(repP[k]));   // detours removed
+    efforts.forEach(e=>{delete e._pieces;delete e._ride;});
     const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
     const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
     segs.push({geom:repGeom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
