@@ -696,11 +696,102 @@ function detect(rides,opt){
     const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
     segs.push({geom:repGeom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
       efforts:[...timed,...untimed],timed:timed.length>0,partials:partialRides.size,
-      name:null,splits:[],subNames:{}});
+      name:null,splits:[],subNames:{},_all:efforts,_partialRides:partialRides});
   }
+  // shorter variants: if the partial rides consistently ride a substantial shorter
+  // line (e.g. cutting out before a summit climb), surface it as its own segment
+  // with every ride's effort computed over just that shared ground
+  const variants=deriveVariants(segs,{radius,minLen,minRides});
+  segs.forEach(s=>{delete s._all;delete s._partialRides;});
+  segs.push(...variants);
   segs.sort((a,b)=>b.dist-a.dist);
-  segs.forEach((s,i)=>{if(!s.name)s.name="Segment "+String.fromCharCode(65+i);});
+  segs.forEach((s,i)=>{if(!s.name&&!s.variant)s.name="Segment "+String.fromCharCode(65+i);});
+  segs.forEach(s=>{ if(!s.name&&s.variant){ const n=(s._parent&&s._parent.name)||"Segment";
+    let suffix=" · short", k=2;
+    while(segs.some(o=>o!==s&&o.name===n+suffix)) suffix=" · short "+(k++);
+    s.name=n+suffix; } delete s._parent; });
   return segs;
+}
+
+/* ---------- shorter-variant derivation ---------- */
+function maskRegions(mask,bridge,minRun){
+  // bridge small gaps, then collect contiguous 1-runs of at least minRun
+  const m=mask.slice(); let last=-1;
+  for(let i=0;i<m.length;i++){ if(m[i]){ if(last>=0&&i-last<=bridge) for(let k=last+1;k<i;k++)m[k]=1; last=i; } }
+  const out=[]; let start=-1;
+  for(let i=0;i<=m.length;i++){
+    if(i<m.length&&m[i]){ if(start<0)start=i; }
+    else if(start>=0){ if(i-start>=minRun)out.push([start,i-1]); start=-1; }
+  }
+  return out;
+}
+function sliceEffortByRegions(e,G,gGrid,inRegion,radius,cell){
+  // classify each effort point as on/off the variant ground, bridge small gaps,
+  // then accumulate dist / elevation / moving time over the kept pieces
+  const flags=e.pts.map(p=>{const xy=toXY(p);
+    return neighbors(gGrid,G,xy.x,xy.y,cell,radius).some(([j])=>inRegion[j])?1:0;});
+  for(let i=1,gap=0;i<flags.length;i++){ // bridge ≤6-pt gaps (~70m)
+    if(flags[i]){ if(gap>0&&gap<=6)for(let k=i-gap;k<i;k++)flags[k]=1; gap=0; } else gap++;
+  }
+  const pts=[]; let dist=0,up=0,dn=0,mt=0,haveT=true,run=0;
+  for(let i=0;i<flags.length;i++){
+    if(!flags[i]){run=0;continue;}
+    run++; pts.push(e.pts[i]);
+    if(run>1){ const a=e.pts[i-1],b=e.pts[i], d=hav(a,b); dist+=d;
+      if(a.ele!=null&&b.ele!=null){const de=b.ele-a.ele; de>0?up+=de:dn+=de;}
+      if(a.t!=null&&b.t!=null){const dt=(b.t-a.t)/1000; if(dt>0&&d/dt>0.8)mt+=dt;} else haveT=false;
+    }
+  }
+  const t=haveT?mt:null;
+  return {ride:e.ride,name:e.name,dist,time:t,speed:t?dist/t:null,up,down:dn,pts};
+}
+function deriveVariants(segs,opt){
+  const {radius,minLen,minRides}=opt, cell=radius, variants=[];
+  for(const s of segs){
+    if(!s.partials||!s._all) continue;
+    const G=s.geom, gGrid=buildGrid(G,cell);
+    // per-ride coverage of the parent geometry
+    const cover={};
+    for(const e of s._all){
+      const eg=buildGrid(e.pts,cell);
+      const m=cover[e.ride]||(cover[e.ride]=new Uint8Array(G.length));
+      for(let i=0;i<G.length;i++) if(!m[i]&&neighbors(eg,e.pts,G[i]._x,G[i]._y,cell,radius).length) m[i]=1;
+    }
+    const claimed=[];
+    for(const pr of s._partialRides){
+      if(!cover[pr]) continue;
+      const regions=maskRegions(cover[pr],8,20);   // bridge ~100m, keep runs ≥ ~240m
+      if(!regions.length) continue;
+      let vlen=0; regions.forEach(([a,b])=>{vlen+=spanDist(G,a,b);});
+      // substantial-but-shorter gate: no slivers, no near-duplicates of the parent
+      if(vlen<Math.max(minLen*2,s.dist*0.2)||vlen>s.dist*0.9) continue;
+      const inRegion=new Uint8Array(G.length); regions.forEach(([a,b])=>{for(let i=a;i<=b;i++)inRegion[i]=1;});
+      // dedupe: same ground as an already-emitted variant of this parent?
+      const key=regions.map(r=>r.join("-")).join(",");
+      if(claimed.some(c=>{let overlap=0,tot=0; for(let i=0;i<G.length;i++){if(inRegion[i]||c[i])tot++; if(inRegion[i]&&c[i])overlap++;} return tot&&overlap/tot>0.8;})) continue;
+      // every ride's effort over the variant ground
+      const vEff=s._all.map(e=>sliceEffortByRegions(e,G,gGrid,inRegion,radius,cell)).filter(e=>e.dist>0);
+      let repLen=-1; vEff.forEach(e=>{if(e.dist>repLen)repLen=e.dist;});
+      const full=vEff.filter(e=>e.dist>=repLen*0.8);
+      const byRide={};
+      for(const e of full){const cur=byRide[e.ride];
+        if(!cur) byRide[e.ride]=e;
+        else if(e.time!=null&&cur.time!=null){if(e.time<cur.time)byRide[e.ride]=e;}
+        else if(e.dist>cur.dist) byRide[e.ride]=e;}
+      const finalE=Object.values(byRide);
+      if(finalE.length<minRides) continue;
+      claimed.push(inRegion);
+      const geom=[]; regions.forEach(([a,b])=>{for(let i=a;i<=b;i++)geom.push(cleanPt(G[i]));});
+      const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
+      const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
+      const partials=new Set(vEff.filter(e=>e.dist<repLen*0.8).map(e=>e.ride));
+      finalE.forEach(e=>partials.delete(e.ride));
+      variants.push({geom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
+        efforts:[...timed,...untimed],timed:timed.length>0,partials:partials.size,
+        variant:true,_parent:s,name:null,splits:[],subNames:{}});
+    }
+  }
+  return variants;
 }
 function cleanPt(p){return {lat:p.lat,lon:p.lon,ele:p.ele,t:p.t};}
 
@@ -841,11 +932,11 @@ function packRaw(a){return a.map(p=>[round6(p.lat),round6(p.lon),
   p.ele==null?null:Math.round(p.ele*10)/10,p.t==null?null:p.t]);}
 function unpackRaw(a){return a.map(q=>({lat:q[0],lon:q[1],ele:q[2],t:q[3]}));}
 function packSeg(s){return {name:s.name,dist:s.dist,up:s.up,down:s.down,timed:s.timed,
-  partials:s.partials||0,splits:s.splits||[],subNames:s.subNames||{},geom:packRaw(s.geom),
+  variant:!!s.variant,partials:s.partials||0,splits:s.splits||[],subNames:s.subNames||{},geom:packRaw(s.geom),
   efforts:s.efforts.map(e=>({ride:e.ride,name:e.name,dist:e.dist,time:e.time,
     speed:e.speed,up:e.up,down:e.down,pts:packRaw(e.pts)}))};}
 function unpackSeg(o){return {name:o.name,dist:o.dist,up:o.up,down:o.down,timed:o.timed,
-  partials:o.partials||0,splits:o.splits||[],subNames:o.subNames||{},geom:unpackRaw(o.geom),
+  variant:!!o.variant,partials:o.partials||0,splits:o.splits||[],subNames:o.subNames||{},geom:unpackRaw(o.geom),
   efforts:o.efforts.map(e=>({...e,pts:unpackRaw(e.pts)}))};}
 
 /* local cache: localStorage (works on GitHub Pages; no-ops where blocked) */
@@ -1325,11 +1416,12 @@ function renderSegPane(){
   const renderCard=(i)=>{
     const s=SEGS[i], best=s.timed?s.efforts[0]:null;
     const subTag=(s.splits&&s.splits.length)?`<span class="tag">${s.splits.length+1} parts</span>`:"";
+    const varTag=s.variant?`<span class="tag" title="a shorter line of a longer segment, ridden on its own">↳ shorter line</span>`:"";
     const d=document.createElement("div");d.className="seg"+(i===SEL?" active":"");
     d.innerHTML=`<div class="top"><span class="name">${escapeHtml(s.name)}</span>
       <span class="tag">${s.efforts.length} rides</span></div>
       <div class="meta"><span>${fmtDist(s.dist)}</span><span>↑${fmtEle(s.up)}</span>
-      ${best?`<span class="b">best ${fmtTime(best.time)}</span>`:`<span>untimed</span>`}${subTag}</div>`;
+      ${best?`<span class="b">best ${fmtTime(best.time)}</span>`:`<span>untimed</span>`}${varTag}${subTag}</div>`;
     d.onclick=()=>selectSeg(i); el.appendChild(d);
   };
   areas.forEach(a=>{
