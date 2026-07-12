@@ -544,15 +544,9 @@ function matchPair(A,gridB,B,radius,cell,minLen,step){
   return runs;
 }
 function spanDist(P,i0,i1){let d=0;for(let i=i0+1;i<=i1;i++)d+=hav(P[i-1],P[i]);return d;}
+// skips (one-sided detours recorded during matching) are only used to judge run
+// balance in closeRun; fairness of effort times comes from per-level slicing
 function skipDist(P,skips){let d=0;for(const s of(skips||[]))d+=spanDist(P,s.j0,s.j1);return d;}
-// contiguous [lo,hi] index ranges of [i0,i1] with the detour skips removed
-function keptRanges(i0,i1,skips){
-  const ss=(skips||[]).filter(s=>s.j0>=i0&&s.j1<=i1).sort((a,b)=>a.j0-b.j0);
-  const out=[]; let lo=i0;
-  for(const s of ss){ if(s.j0>lo)out.push([lo,s.j0]); lo=Math.max(lo,s.j1); }
-  if(i1>lo)out.push([lo,i1]);
-  return out.length?out:[[i0,i1]];
-}
 // does interval m re-cover ground already covered by the attempt's pieces?
 // (repeat lap = same ground = separate attempt; detour-split = new ground = same attempt)
 // Sampled densely with a >60% majority: loops often share short stretches between
@@ -638,78 +632,107 @@ function detect(rides,opt){
     // same ground are separate attempts (out-and-back repeats).
     const perRideM={};
     members.forEach(u=>{const m=segMeta[u];(perRideM[m.ride]||(perRideM[m.ride]=[])).push(m);});
-    const efforts=[];
+    const attempts=[];
     for(const rk in perRideM){
       const r=+rk, P=R2[r].P;
       const list=perRideM[rk].sort((a,b)=>a.i0-b.i0);
-      const attempts=[];
+      const groups=[];
       for(const m of list){
-        const last=attempts[attempts.length-1];
+        const last=groups[groups.length-1];
         if(last&&!coversSameGround(P,last,m)) last.push(m);
-        else attempts.push([m]);
+        else groups.push([m]);
       }
-      for(const pieces of attempts){
-        // build the effort from only the co-ridden ranges of every piece, excluding
-        // detour skips. time is MOVING time (stops excluded) so stopped time doesn't
-        // distort the comparison.
-        const seg=[]; let dist=0,up=0,dn=0,mt=0,haveT=true;
-        for(const m of pieces) for(const [lo,hi] of keptRanges(m.i0,m.i1,m.skips)){
-          for(let k=lo;k<=hi;k++) seg.push(cleanPt(P[k]));
-          for(let k=lo+1;k<=hi;k++){ const d=hav(P[k-1],P[k]); dist+=d;
-            if(P[k].ele!=null&&P[k-1].ele!=null){ const de=P[k].ele-P[k-1].ele; if(de>0)up+=de;else dn+=de; }
-            if(P[k].t!=null&&P[k-1].t!=null){ const dt=(P[k].t-P[k-1].t)/1000; if(dt>0&&d/dt>0.8) mt+=dt; }
-            else haveT=false;
-          }
-        }
-        const t=haveT?mt:null;
-        efforts.push({_pieces:pieces,_ride:r,ride:r,name:rides[r].name,dist,time:t,
-          speed:t?dist/t:null,up,down:dn,pts:seg});
+      for(const pieces of groups){
+        // attempts keep their FULL ground (incl. any spur/detour); fairness comes
+        // from per-level slicing below, not from excising ground up front
+        const pts=[];
+        for(const m of pieces) for(let k=m.i0;k<=m.i1;k++) pts.push(cleanPt(P[k]));
+        let dist=0; for(let k=1;k<pts.length;k++) dist+=hav(pts[k-1],pts[k]);
+        attempts.push({ride:r,name:rides[r].name,dist,pts,single:pieces.length===1});
       }
     }
-    let repLen=-1; efforts.forEach(e=>{if(e.dist>repLen)repLen=e.dist;});
-    // full-coverage rule: an effort only ranks if it covers ~the whole segment.
-    // A ride that merely crossed or briefly joined the trail must not headline
-    // the leaderboard with a short (fast-looking) partial pass.
-    const full=efforts.filter(e=>e.dist>=repLen*0.8);
-    const partialRides=new Set(efforts.filter(e=>e.dist<repLen*0.8).map(e=>e.ride));
-    full.forEach(e=>partialRides.delete(e.ride));   // ride still counts if it also has a full pass
-    const byRide={};
-    for(const e of full){const cur=byRide[e.ride];
-      if(!cur) byRide[e.ride]=e;
-      else if(e.time!=null&&cur.time!=null){if(e.time<cur.time)byRide[e.ride]=e;}
-      else if(e.dist>cur.dist) byRide[e.ride]=e;}
-    const finalE=Object.values(byRide);
-    if(finalE.length<minRides) continue;   // needs minRides FULL traversals
-    // representative geometry: prefer a contiguous (single-piece) full effort so the
-    // drawn segment has no straight-line jump across a detour gap
-    let repE=null;
-    for(const e of full){ if(!repE)repE=e;
-      else{ const single=e._pieces.length===1, repSingle=repE._pieces.length===1;
-        if(single&&!repSingle&&e.dist>=repE.dist*0.95) repE=e;
-        else if(single===repSingle&&e.dist>repE.dist) repE=e; } }
-    repLen=repE.dist;
-    const repP=R2[repE._ride].P, repGeom=[];
-    for(const m of repE._pieces) for(const [lo,hi] of keptRanges(m.i0,m.i1,m.skips))
-      for(let k=lo;k<=hi;k++) repGeom.push(cleanPt(repP[k]));   // detours removed
-    efforts.forEach(e=>{delete e._pieces;delete e._ride;});
-    const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
-    const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
-    segs.push({geom:repGeom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
-      efforts:[...timed,...untimed],timed:timed.length>0,partials:partialRides.size,
-      name:null,splits:[],subNames:{},_all:efforts,_partialRides:partialRides});
+    // reference ground G: the longest attempt (prefer contiguous, so the drawn
+    // segment has no straight-line jump across a gap)
+    let repA=null;
+    for(const a of attempts){ if(!repA)repA=a;
+      else{ if(a.single&&!repA.single&&a.dist>=repA.dist*0.95) repA=a;
+        else if(a.single===repA.single&&a.dist>repA.dist) repA=a; } }
+    const G=repA.pts, gGrid=buildGrid(G,cell), gLen=spanDist(G,0,G.length-1);
+    // per-ride coverage of G
+    const cover={};
+    for(const a of attempts){
+      const eg=buildGrid(a.pts,cell);
+      const m=cover[a.ride]||(cover[a.ride]=new Uint8Array(G.length));
+      for(let i=0;i<G.length;i++) if(!m[i]&&neighbors(eg,a.pts,G[i]._x,G[i]._y,cell,radius).length) m[i]=1;
+    }
+    const maskLen=mask=>{let d=0;maskRegions(mask,8,20).forEach(([a,b])=>{d+=spanDist(G,a,b);});return d;};
+    // coverage LEVELS: the full ground, each shorter line partial rides actually
+    // ride, and contiguous complements (a spur only some rides add)
+    const fullMask=new Uint8Array(G.length).fill(1);
+    const patterns=[{mask:fullMask,kind:"full"}];
+    for(const rk in cover){
+      const covLen=maskLen(cover[rk]);
+      if(covLen>=gLen*0.9) continue;               // rides the whole thing — no level
+      patterns.push({mask:cover[rk],kind:"short"});
+      const comp=new Uint8Array(G.length);
+      for(let i=0;i<G.length;i++) comp[i]=cover[rk][i]?0:1;
+      patterns.push({mask:comp,kind:"spur"});
+    }
+    const emitted=[], claimed=[];
+    for(const {mask,kind} of patterns){
+      const regions=maskRegions(mask,8,20);        // bridge ~100m, keep runs ≥ ~240m
+      if(!regions.length) continue;
+      if(kind==="spur"&&regions.length>1) continue; // a spur is one coherent piece of trail
+      let vlen=0; regions.forEach(([a,b])=>{vlen+=spanDist(G,a,b);});
+      if(kind==="short"&&(vlen<Math.max(minLen*2,gLen*0.2)||vlen>gLen*0.9)) continue;
+      if(kind==="spur"&&(vlen<Math.max(minLen*2,gLen*0.1)||vlen>gLen*0.9)) continue;
+      const inRegion=new Uint8Array(G.length); regions.forEach(([a,b])=>{for(let i=a;i<=b;i++)inRegion[i]=1;});
+      if(kind!=="full"&&claimed.some(c=>{let ov=0,tot=0;
+        for(let i=0;i<G.length;i++){if(inRegion[i]||c[i])tot++;if(inRegion[i]&&c[i])ov++;}
+        return tot&&ov/tot>0.8;})) continue;       // same ground as an emitted level
+      // every attempt's effort over this level's ground
+      const sliced=attempts.map(a=>sliceEffortByRegions(a,G,gGrid,inRegion,radius,cell));
+      let repLen=-1; sliced.forEach(e=>{if(e.dist>repLen)repLen=e.dist;});
+      if(repLen<minLen) continue;
+      // full-coverage rule: only rides that covered ~the whole level rank; passes
+      // under 25% are ignored outright (brushing past the trail isn't an attempt)
+      const full=sliced.filter(e=>e.dist>=repLen*0.9);
+      const byRide={};
+      for(const e of full){const cur=byRide[e.ride];
+        if(!cur) byRide[e.ride]=e;
+        else if(e.time!=null&&cur.time!=null){if(e.time<cur.time)byRide[e.ride]=e;}
+        else if(e.dist>cur.dist) byRide[e.ride]=e;}
+      const finalE=Object.values(byRide);
+      if(finalE.length<minRides) continue;
+      // dedupe by leaderboard: same rides over ~the same distance is the same level
+      const rideKey=finalE.map(e=>e.ride).sort().join(",");
+      if(emitted.some(x=>x._rideKey===rideKey&&Math.abs(x.dist-repLen)<Math.max(x.dist,repLen)*0.15)) continue;
+      if(kind!=="full") claimed.push(inRegion);
+      const partials=new Set(sliced.filter(e=>e.dist>=repLen*0.2&&e.dist<repLen*0.9).map(e=>e.ride));
+      finalE.forEach(e=>partials.delete(e.ride));
+      const geom=[]; regions.forEach(([a,b])=>{for(let i=a;i<=b;i++)geom.push(cleanPt(G[i]));});
+      const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
+      const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
+      emitted.push({geom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
+        efforts:[...timed,...untimed],timed:timed.length>0,partials:partials.size,
+        _kind:kind,_rideKey:rideKey,name:null,splits:[],subNames:{}});
+    }
+    if(!emitted.length) continue;
+    // the longest emitted level is the primary segment; the rest are its variants
+    emitted.sort((a,b)=>b.dist-a.dist);
+    emitted[0].variant=false;
+    for(let i=1;i<emitted.length;i++){ emitted[i].variant=true; emitted[i]._parent=emitted[0]; }
+    segs.push(...emitted);
   }
-  // shorter variants: if the partial rides consistently ride a substantial shorter
-  // line (e.g. cutting out before a summit climb), surface it as its own segment
-  // with every ride's effort computed over just that shared ground
-  const variants=deriveVariants(segs,{radius,minLen,minRides});
-  segs.forEach(s=>{delete s._all;delete s._partialRides;});
-  segs.push(...variants);
   segs.sort((a,b)=>b.dist-a.dist);
-  segs.forEach((s,i)=>{if(!s.name&&!s.variant)s.name="Segment "+String.fromCharCode(65+i);});
+  let li=0;
+  segs.forEach(s=>{ if(!s.name&&!s.variant) s.name="Segment "+String.fromCharCode(65+(li++)); });
   segs.forEach(s=>{ if(!s.name&&s.variant){ const n=(s._parent&&s._parent.name)||"Segment";
-    let suffix=" · short", k=2;
-    while(segs.some(o=>o!==s&&o.name===n+suffix)) suffix=" · short "+(k++);
-    s.name=n+suffix; } delete s._parent; });
+    const base=s._kind==="spur"?" · spur":" · short";
+    let suffix=base, k=2;
+    while(segs.some(o=>o!==s&&o.name===n+suffix)) suffix=base+" "+(k++);
+    s.name=n+suffix; } });
+  segs.forEach(s=>{ delete s._parent; delete s._kind; delete s._rideKey; });
   return segs;
 }
 
@@ -726,12 +749,16 @@ function maskRegions(mask,bridge,minRun){
   return out;
 }
 function sliceEffortByRegions(e,G,gGrid,inRegion,radius,cell){
-  // classify each effort point as on/off the variant ground, bridge small gaps,
+  // classify each effort point as on/off the level's ground, bridge INTERIOR gaps
+  // up to ~480m (a ride that briefly takes a different line around an obstacle
+  // still rode the level; a real spur/shortcut gap is far longer and stays open),
   // then accumulate dist / elevation / moving time over the kept pieces
   const flags=e.pts.map(p=>{const xy=toXY(p);
     return neighbors(gGrid,G,xy.x,xy.y,cell,radius).some(([j])=>inRegion[j])?1:0;});
-  for(let i=1,gap=0;i<flags.length;i++){ // bridge ≤6-pt gaps (~70m)
-    if(flags[i]){ if(gap>0&&gap<=6)for(let k=i-gap;k<i;k++)flags[k]=1; gap=0; } else gap++;
+  let seen=false;
+  for(let i=0,gap=0;i<flags.length;i++){
+    if(flags[i]){ if(seen&&gap>0&&gap<=40)for(let k=i-gap;k<i;k++)flags[k]=1; seen=true; gap=0; }
+    else if(seen) gap++;   // leading/trailing off-ground points are never bridged in
   }
   const pts=[]; let dist=0,up=0,dn=0,mt=0,haveT=true,run=0;
   for(let i=0;i<flags.length;i++){
@@ -744,54 +771,6 @@ function sliceEffortByRegions(e,G,gGrid,inRegion,radius,cell){
   }
   const t=haveT?mt:null;
   return {ride:e.ride,name:e.name,dist,time:t,speed:t?dist/t:null,up,down:dn,pts};
-}
-function deriveVariants(segs,opt){
-  const {radius,minLen,minRides}=opt, cell=radius, variants=[];
-  for(const s of segs){
-    if(!s.partials||!s._all) continue;
-    const G=s.geom, gGrid=buildGrid(G,cell);
-    // per-ride coverage of the parent geometry
-    const cover={};
-    for(const e of s._all){
-      const eg=buildGrid(e.pts,cell);
-      const m=cover[e.ride]||(cover[e.ride]=new Uint8Array(G.length));
-      for(let i=0;i<G.length;i++) if(!m[i]&&neighbors(eg,e.pts,G[i]._x,G[i]._y,cell,radius).length) m[i]=1;
-    }
-    const claimed=[];
-    for(const pr of s._partialRides){
-      if(!cover[pr]) continue;
-      const regions=maskRegions(cover[pr],8,20);   // bridge ~100m, keep runs ≥ ~240m
-      if(!regions.length) continue;
-      let vlen=0; regions.forEach(([a,b])=>{vlen+=spanDist(G,a,b);});
-      // substantial-but-shorter gate: no slivers, no near-duplicates of the parent
-      if(vlen<Math.max(minLen*2,s.dist*0.2)||vlen>s.dist*0.9) continue;
-      const inRegion=new Uint8Array(G.length); regions.forEach(([a,b])=>{for(let i=a;i<=b;i++)inRegion[i]=1;});
-      // dedupe: same ground as an already-emitted variant of this parent?
-      const key=regions.map(r=>r.join("-")).join(",");
-      if(claimed.some(c=>{let overlap=0,tot=0; for(let i=0;i<G.length;i++){if(inRegion[i]||c[i])tot++; if(inRegion[i]&&c[i])overlap++;} return tot&&overlap/tot>0.8;})) continue;
-      // every ride's effort over the variant ground
-      const vEff=s._all.map(e=>sliceEffortByRegions(e,G,gGrid,inRegion,radius,cell)).filter(e=>e.dist>0);
-      let repLen=-1; vEff.forEach(e=>{if(e.dist>repLen)repLen=e.dist;});
-      const full=vEff.filter(e=>e.dist>=repLen*0.8);
-      const byRide={};
-      for(const e of full){const cur=byRide[e.ride];
-        if(!cur) byRide[e.ride]=e;
-        else if(e.time!=null&&cur.time!=null){if(e.time<cur.time)byRide[e.ride]=e;}
-        else if(e.dist>cur.dist) byRide[e.ride]=e;}
-      const finalE=Object.values(byRide);
-      if(finalE.length<minRides) continue;
-      claimed.push(inRegion);
-      const geom=[]; regions.forEach(([a,b])=>{for(let i=a;i<=b;i++)geom.push(cleanPt(G[i]));});
-      const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
-      const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
-      const partials=new Set(vEff.filter(e=>e.dist<repLen*0.8).map(e=>e.ride));
-      finalE.forEach(e=>partials.delete(e.ride));
-      variants.push({geom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
-        efforts:[...timed,...untimed],timed:timed.length>0,partials:partials.size,
-        variant:true,_parent:s,name:null,splits:[],subNames:{}});
-    }
-  }
-  return variants;
 }
 function cleanPt(p){return {lat:p.lat,lon:p.lon,ele:p.ele,t:p.t};}
 
@@ -1359,7 +1338,9 @@ function drawSegs(){
       const pl=L.polyline(s.geom.map(p=>[p.lat,p.lon]),
         {color:active?"#5B5BD6":"#B9BAEC",weight:active?6:4,opacity:active?1:.85})
         .addTo(map).bindTooltip(s.name+" · "+fmtDist(s.dist),{sticky:true,className:"seg-tip"});
-      pl.on("click",e=>{ if(splitMode&&i===SEL){L.DomEvent.stop(e); addSplitAt(e.latlng);} else selectSeg(i); });
+      // in split mode, taps on ANY segment line drop a pin on the SELECTED segment
+      // (overlapping variant lines sit on top of it; they must not steal the tap)
+      pl.on("click",e=>{ if(splitMode&&SEL>=0){L.DomEvent.stop(e); addSplitAt(e.latlng);} else selectSeg(i); });
       segLayers.push(pl);
     }
   });
