@@ -571,8 +571,10 @@ function makeUF(){const p={};return{
 function mergeIntervals(ivs){
   ivs.sort((a,b)=>a.i0-b.i0); const out=[];
   for(const iv of ivs){const last=out[out.length-1];
-    // tolerance bridges small transition gaps (e.g. around a start out-and-back)
-    if(last && iv.i0<=last.i1+20){ last.i1=Math.max(last.i1,iv.i1); last.skips=(last.skips||[]).concat(iv.skips||[]); }
+    // bridge divergence gaps up to ~480m (40 idx @ 12m step): brief separations
+    // (different line around an obstacle, GPS wander at a stop) must not
+    // fragment one trail into a chain of segments with slivers between them
+    if(last && iv.i0<=last.i1+40){ last.i1=Math.max(last.i1,iv.i1); last.skips=(last.skips||[]).concat(iv.skips||[]); }
     else out.push({i0:iv.i0,i1:iv.i1,skips:(iv.skips||[]).slice()});}
   return out;
 }
@@ -625,24 +627,34 @@ function detect(rides,opt){
         }
       }
       const t=haveT?mt:null;
-      efforts.push({ride:m.ride,name:rides[m.ride].name,dist,time:t,
+      efforts.push({_u:u,ride:m.ride,name:rides[m.ride].name,dist,time:t,
         speed:t?dist/t:null,up,down:dn,pts:seg});
       if(dist>repLen){repLen=dist;rep=u;}
     }
+    // full-coverage rule: an effort only ranks if it covers ~the whole segment.
+    // A ride that merely crossed or briefly joined the trail must not headline
+    // the leaderboard with a short (fast-looking) partial pass.
+    const full=efforts.filter(e=>e.dist>=repLen*0.8);
+    const partialRides=new Set(efforts.filter(e=>e.dist<repLen*0.8).map(e=>e.ride));
+    full.forEach(e=>partialRides.delete(e.ride));   // ride still counts if it also has a full pass
     const byRide={};
-    for(const e of efforts){const cur=byRide[e.ride];
+    for(const e of full){const cur=byRide[e.ride];
       if(!cur) byRide[e.ride]=e;
       else if(e.time!=null&&cur.time!=null){if(e.time<cur.time)byRide[e.ride]=e;}
       else if(e.dist>cur.dist) byRide[e.ride]=e;}
     const finalE=Object.values(byRide);
-    if(finalE.length<minRides) continue;
+    if(finalE.length<minRides) continue;   // needs minRides FULL traversals
+    rep=null;repLen=-1;
+    for(const e of full) if(e.dist>repLen){repLen=e.dist;rep=e._u;}
+    efforts.forEach(e=>delete e._u);
     const repSeg=segMeta[rep], repP=R2[repSeg.ride].P, repGeom=[];
     for(const [lo,hi] of keptRanges(repSeg.i0,repSeg.i1,repSeg.skips))
       for(let k=lo;k<=hi;k++) repGeom.push(cleanPt(repP[k]));   // representative path with detours removed
     const timed=finalE.filter(e=>e.time!=null).sort((x,y)=>x.time-y.time);
     const untimed=finalE.filter(e=>e.time==null).sort((x,y)=>y.dist-x.dist);
     segs.push({geom:repGeom,dist:repLen,up:finalE[0].up,down:finalE[0].down,
-      efforts:[...timed,...untimed],timed:timed.length>0,name:null,splits:[],subNames:{}});
+      efforts:[...timed,...untimed],timed:timed.length>0,partials:partialRides.size,
+      name:null,splits:[],subNames:{}});
   }
   segs.sort((a,b)=>b.dist-a.dist);
   segs.forEach((s,i)=>{if(!s.name)s.name="Segment "+String.fromCharCode(65+i);});
@@ -787,11 +799,11 @@ function packRaw(a){return a.map(p=>[round6(p.lat),round6(p.lon),
   p.ele==null?null:Math.round(p.ele*10)/10,p.t==null?null:p.t]);}
 function unpackRaw(a){return a.map(q=>({lat:q[0],lon:q[1],ele:q[2],t:q[3]}));}
 function packSeg(s){return {name:s.name,dist:s.dist,up:s.up,down:s.down,timed:s.timed,
-  splits:s.splits||[],subNames:s.subNames||{},geom:packRaw(s.geom),
+  partials:s.partials||0,splits:s.splits||[],subNames:s.subNames||{},geom:packRaw(s.geom),
   efforts:s.efforts.map(e=>({ride:e.ride,name:e.name,dist:e.dist,time:e.time,
     speed:e.speed,up:e.up,down:e.down,pts:packRaw(e.pts)}))};}
 function unpackSeg(o){return {name:o.name,dist:o.dist,up:o.up,down:o.down,timed:o.timed,
-  splits:o.splits||[],subNames:o.subNames||{},geom:unpackRaw(o.geom),
+  partials:o.partials||0,splits:o.splits||[],subNames:o.subNames||{},geom:unpackRaw(o.geom),
   efforts:o.efforts.map(e=>({...e,pts:unpackRaw(e.pts)}))};}
 
 /* local cache: localStorage (works on GitHub Pages; no-ops where blocked) */
@@ -1407,7 +1419,8 @@ function renderDetail(el,s){
     <div class="hd">
       <input class="title" id="segName" value="${escapeHtml(s.name)}" />
       <div class="stats"><span>${fmtDist(s.dist)}</span><span>↑${fmtEle(s.up)}</span>
-        <span>↓${fmtEle(Math.abs(s.down))}</span><span>${s.efforts.length} attempts</span></div>
+        <span>↓${fmtEle(Math.abs(s.down))}</span><span>${s.efforts.length} attempts</span>
+        ${s.partials?`<span title="rides that only covered part of this segment are not ranked">${s.partials} partial pass${s.partials>1?"es":""} excluded</span>`:""}</div>
     </div>
     <div class="toolbar">
       <span class="tbtn ${splitMode?"on":""}" id="splitBtn">✂ ${splitMode?"Splitting — click trail":"Split into sub-segments"}</span>
