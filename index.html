@@ -840,11 +840,19 @@ function setPartName(s,k,name){
     b:bd.b?{lat:bd.b.lat,lon:bd.b.lon}:null,brg:bd.brg,name:v});
 }
 function effortStats(P,i0,i1,ride,name){
-  let dist=0,up=0,dn=0;
-  for(let i=i0+1;i<=i1;i++){dist+=hav(P[i-1],P[i]);
-    if(P[i].ele!=null&&P[i-1].ele!=null){const de=P[i].ele-P[i-1].ele;de>0?up+=de:dn+=de;}}
-  const a=P[i0],z=P[i1];
-  const time=(a&&z&&a.t!=null&&z.t!=null)?(z.t-a.t)/1000:null;
+  // MOVING time accumulated step by step — never endpoint elapsed. Sliced efforts
+  // (a long ride's points on a shorter segment's ground) carry hidden seams where
+  // excluded ground was removed: consecutive points jump by the whole excursion's
+  // duration. Endpoint math would swallow that excursion into the part's time;
+  // the moving rule drops the seam step (huge dt, tiny distance = not moving).
+  let dist=0,up=0,dn=0,mt=0,haveT=i1>i0;
+  for(let i=i0+1;i<=i1;i++){
+    const d=hav(P[i-1],P[i]); dist+=d;
+    if(P[i].ele!=null&&P[i-1].ele!=null){const de=P[i].ele-P[i-1].ele;de>0?up+=de:dn+=de;}
+    if(P[i].t!=null&&P[i-1].t!=null){const dt=(P[i].t-P[i-1].t)/1000; if(dt>0&&d/dt>0.8)mt+=dt;}
+    else haveT=false;
+  }
+  const time=haveT?mt:null;
   return {ride,name,dist,time,speed:(time&&dist)?dist/time:null,up,down:dn};
 }
 function subSegments(s){
