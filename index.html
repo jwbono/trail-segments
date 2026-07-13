@@ -441,8 +441,9 @@
         <b>Min length</b>, or <b>Min rides</b> and press <code>Detect segments</code> to re-run.</li>
       <li><b>Track your progress.</b> Open a segment for your PR, latest run vs your best, a time
         trend, and every attempt ranked. Click a ride's name for full ride stats.</li>
-      <li><b>Split (optional).</b> Open a segment, choose <b>Split into sub-segments</b>, and click
-        the highlighted trail to drop cuts — each part gets its own ranking.</li>
+      <li><b>Cut the course (optional).</b> Open a segment, choose <b>Cut into parts</b>, and click
+        the trail to drop cuts at junctions — each part gets its own ranking, and cuts + part
+        names apply across <b>every</b> segment on that ground.</li>
       <li><b>Units.</b> Toggle <b>Metric / Imperial</b> in the top bar anytime.</li>
       <li><b>Back up (optional).</b> Add a GitHub token, then <b>Back up now</b> to save all your
         rides and segments to the repo (or turn on <b>Auto-backup</b>). <b>Restore</b> brings
@@ -795,14 +796,48 @@ function sliceEffortByRegions(e,G,gGrid,inRegion,radius,cell){
 }
 function cleanPt(p){return {lat:p.lat,lon:p.lon,ele:p.ele,t:p.t};}
 
-/* ---------- sub-segments ---------- */
+/* ---------- sub-segments (global course cuts) ---------- */
 function nearestIdx(pts,pt){let bi=0,bd=Infinity;
   for(let i=0;i<pts.length;i++){const d=hav(pts[i],pt);if(d<bd){bd=d;bi=i;}}return bi;}
 function geomCum(geom){const c=[0];for(let i=1;i<geom.length;i++)c.push(c[i-1]+hav(geom[i-1],geom[i]));return c;}
-function orderedCuts(s){
-  const cum=geomCum(s.geom);
-  return [...(s.splits||[])].map(c=>({c,d:cum[nearestIdx(s.geom,c)]}))
-    .sort((a,b)=>a.d-b.d).map(o=>o.c);
+// cuts are defined ONCE on the course; a segment picks up every cut that lies on
+// its ground, so one set of cuts (Corral top, Connector top, …) parts ALL segments
+function cutsForSeg(s){
+  const cum=geomCum(s.geom), out=[];
+  for(const c of CUTS){
+    const gi=nearestIdx(s.geom,c);
+    if(hav(s.geom[gi],c)<=60) out.push({c,d:cum[gi]});
+  }
+  out.sort((a,b)=>a.d-b.d);
+  // collapse cuts that land on ~the same spot of this segment
+  const res=[]; for(const o of out){ if(!res.length||o.d-res[res.length-1].d>50) res.push(o); }
+  return res.map(o=>o.c);
+}
+function orderedCuts(s){ return cutsForSeg(s); }
+// part identity = its boundary cuts + travel direction: the stretch between the
+// same two cuts is the same part on EVERY segment (and a terminus-to-cut part
+// matches other terminus-to-cut parts ending at that cut). Direction keeps an
+// out-and-back's climb and descent (same ground) distinct.
+function partBoundaryCuts(s,k){
+  const cuts=orderedCuts(s);
+  const a=k>0?cuts[k-1]:null, b=k<cuts.length?cuts[k]:null;
+  const idxs=[0,...cuts.map(c=>nearestIdx(s.geom,c)).sort((x,y)=>x-y),s.geom.length-1];
+  const p0=s.geom[idxs[k]], p1=s.geom[idxs[k+1]];
+  return {a,b,brg:Math.atan2(p1.lon-p0.lon,p1.lat-p0.lat)};
+}
+function angleDiff(a,b){let d=Math.abs(a-b)%(2*Math.PI); return d>Math.PI?2*Math.PI-d:d;}
+function sameBoundary(x,y){ if(!x&&!y)return true; if(!x||!y)return false; return hav(x,y)<60; }
+function findPartNameEntry(bd){
+  for(const p of PARTNAMES)
+    if(sameBoundary(p.a,bd.a)&&sameBoundary(p.b,bd.b)&&angleDiff(p.brg,bd.brg)<Math.PI/2) return p;
+  return null;
+}
+function partName(s,k){ const e=findPartNameEntry(partBoundaryCuts(s,k)); return (e&&e.name)||("Part "+(k+1)); }
+function setPartName(s,k,name){
+  const bd=partBoundaryCuts(s,k), e=findPartNameEntry(bd), v=(name||"").trim();
+  if(e){ if(v)e.name=v; else PARTNAMES.splice(PARTNAMES.indexOf(e),1); }
+  else if(v) PARTNAMES.push({a:bd.a?{lat:bd.a.lat,lon:bd.a.lon}:null,
+    b:bd.b?{lat:bd.b.lat,lon:bd.b.lon}:null,brg:bd.brg,name:v});
 }
 function effortStats(P,i0,i1,ride,name){
   let dist=0,up=0,dn=0;
@@ -815,7 +850,7 @@ function effortStats(P,i0,i1,ride,name){
 function subSegments(s){
   const cuts=orderedCuts(s), n=cuts.length+1, subs=[];
   for(let k=0;k<n;k++){
-    const name=(s.subNames&&s.subNames[k])||("Part "+(k+1));
+    const name=partName(s,k);
     const efforts=s.efforts.map(e=>{
       const idxs=[0,...cuts.map(c=>nearestIdx(e.pts,c)),e.pts.length-1];
       for(let i=1;i<idxs.length;i++) if(idxs[i]<idxs[i-1]) idxs[i]=idxs[i-1];
@@ -950,6 +985,8 @@ function dataSig(){
   RIDES.forEach(r=>{ s+="|"+(r.name||"")+":"+r.raw.length+":"+((r.tags||[]).join(","))+":"+(r.rider||""); });
   SEGS.forEach(g=>{ s+="#"+(g.name||"")+":"+((g.splits||[]).length)+":"+g.efforts.length; });
   ZONES.forEach(z=>{ s+="z"+z.lat.toFixed(5)+","+z.lon.toFixed(5)+","+z.r; });
+  CUTS.forEach(c=>{ s+="c"+c.lat.toFixed(5)+","+c.lon.toFixed(5); });
+  PARTNAMES.forEach(p=>{ s+="p"+(p.name||""); });
   return s;
 }
 let _saveT=null;
@@ -959,6 +996,7 @@ function save(){ clearTimeout(_saveT); _saveT=setTimeout(()=>{
   try{ const sp=JSON.stringify(SEGS.map(packSeg));
     if(sp.length<4500000) lsSet("contour:segs",sp); else lsDel("contour:segs"); }catch(e){}
   try{ lsSet("contour:zones",JSON.stringify(ZONES)); }catch(e){}
+  try{ lsSet("contour:cuts",JSON.stringify(CUTS)); lsSet("contour:partnames",JSON.stringify(PARTNAMES)); }catch(e){}
   renderBackupState(); scheduleAutoBackup();
 },400); }
 function clearStore(){ lsDel("contour:rides"); lsDel("contour:segs"); }
@@ -967,6 +1005,17 @@ function loadLocal(){
     if(r){RIDES=JSON.parse(r).map(o=>({name:o.name,rider:o.rider||"",tags:o.tags||[],raw:unpackRaw(o.raw)}));}}catch(e){}
   try{const s=lsGet("contour:segs"); if(s){SEGS=JSON.parse(s).map(unpackSeg);}}catch(e){}
   try{const z=lsGet("contour:zones"); if(z){ZONES=JSON.parse(z)||[];}}catch(e){}
+  try{const c=lsGet("contour:cuts"); if(c){CUTS=JSON.parse(c)||[];}}catch(e){}
+  try{const p=lsGet("contour:partnames"); if(p){PARTNAMES=JSON.parse(p)||[];}}catch(e){}
+  migrateLegacySplits();
+}
+// older versions stored splits per segment; fold them into the global course cuts
+function migrateLegacySplits(){
+  let moved=false;
+  SEGS.forEach(s=>{ (s.splits||[]).forEach(c=>{
+    if(!CUTS.some(x=>hav(x,c)<15)){ CUTS.push({lat:c.lat,lon:c.lon}); moved=true; } });
+    if(s.splits&&s.splits.length){ s.splits=[]; moved=true; } });
+  if(moved) save();
 }
 function load(){
   loadLocal();
@@ -1038,7 +1087,7 @@ async function backupNow(auto){
   try{
     const payload={updated:new Date().toISOString(),
       rides:RIDES.map(r=>({name:r.name,rider:r.rider||"",tags:r.tags||[],raw:packRaw(r.raw)})),
-      segments:SEGS.map(packSeg),zones:ZONES};
+      segments:SEGS.map(packSeg),zones:ZONES,cuts:CUTS,partNames:PARTNAMES};
     const ex=await ghGetFile(owner,repo,"data/backup.json",token);
     await ghPutFile(owner,repo,"data/backup.json",payload,
       `Backup ${RIDES.length} rides, ${SEGS.length} segments`,token,ex&&ex.sha);
@@ -1049,6 +1098,7 @@ async function backupNow(auto){
 }
 function applyRestored(rides,segs){
   RIDES=rides; SEGS=segs||[]; SEL=-1; RSEL=-1; splitMode=false; ORIGIN=null;
+  migrateLegacySplits();
   if(RIDES.length)setOrigin(RIDES[0].raw[0].lat,RIDES[0].raw[0].lon);
   renderRides();drawRides();drawSegs();renderSegPane();fitAll();updateRunBtn();
   lsSet("contour:backupSig",dataSig()); renderBackupState(); save();
@@ -1058,6 +1108,8 @@ async function restoreFromRepo(autoOnLoad){
   const bk=await fetchJSON("data/backup.json?t="+Date.now());
   if(bk&&Array.isArray(bk.rides)){
     if(Array.isArray(bk.zones)){ ZONES=bk.zones.filter(x=>x&&isFinite(x.lat)&&isFinite(x.lon)&&x.r>0); drawZones(); }
+    if(Array.isArray(bk.cuts)) CUTS=bk.cuts.filter(x=>x&&isFinite(x.lat)&&isFinite(x.lon));
+    if(Array.isArray(bk.partNames)) PARTNAMES=bk.partNames.filter(x=>x&&x.name&&(x.a||x.b));
     applyRestored(
       bk.rides.map(o=>({name:o.name,rider:o.rider||"",tags:o.tags||[],raw:unpackRaw(o.raw)})),
       Array.isArray(bk.segments)?bk.segments.map(unpackSeg):[]);
@@ -1086,6 +1138,8 @@ async function legacyRestore(auto){
 /* ---------- state + map ---------- */
 let RIDES=[], SEGS=[], SEL=-1, RSEL=-1, splitMode=false;
 let ZONES=[], zoneMode=false, zoneLayers=[];   // excluded areas: {lat,lon,r}
+let CUTS=[];        // global course cuts {lat,lon} — apply to every segment they lie on
+let PARTNAMES=[];   // part names anchored to ground {lat,lon,brg,name}
 let map, rideLayers=[], segLayers=[], splitMarkers=[];
 let KNOWN_RIDERS=[], RIDER_FILTER=null;   // null = show all riders
 let TAG_FILTER=null, TEXT_FILTER="";      // null/"" = no tag/text filter
@@ -1313,8 +1367,7 @@ function mergeSegEdits(oldSegs,fresh){
   fresh.forEach(f=>{ const m=oldSegs.find(o=>segMatch(o,f));
     if(!m) return;
     if(m.name && !/^Segment [A-Z]$/.test(m.name)) f.name=m.name;        // keep renamed
-    if(m.splits&&m.splits.length){ f.splits=m.splits.map(c=>({lat:c.lat,lon:c.lon}));
-      f.subNames=Object.assign({},m.subNames||{}); }                    // keep cuts + part names
+    // cuts and part names are global (CUTS/PARTNAMES) — nothing else to carry
   });
   return fresh;
 }
@@ -1349,16 +1402,15 @@ function drawSegs(){
   splitMarkers.forEach(m=>map.removeLayer(m));splitMarkers=[];
   SEGS.forEach((s,i)=>{
     const active=i===SEL;
-    if(active && s.splits && s.splits.length){
+    const segCuts=active?orderedCuts(s):[];
+    if(active && segCuts.length){
       // draw each sub-piece in its own color
-      const cum=geomCum(s.geom);
-      const cuts=orderedCuts(s).map(c=>nearestIdx(s.geom,c)).sort((a,b)=>a-b);
+      const cuts=segCuts.map(c=>nearestIdx(s.geom,c)).sort((a,b)=>a-b);
       const bounds=[0,...cuts,s.geom.length-1];
       for(let k=0;k<bounds.length-1;k++){
         const slice=s.geom.slice(bounds[k],bounds[k+1]+1).map(p=>[p.lat,p.lon]);
         const pl=L.polyline(slice,{color:SUBCOLORS[k%SUBCOLORS.length],weight:6,opacity:1})
-          .addTo(map).bindTooltip(((s.subNames&&s.subNames[k])||("Part "+(k+1))),
-            {sticky:true,className:"seg-tip"});
+          .addTo(map).bindTooltip(partName(s,k),{sticky:true,className:"seg-tip"});
         pl.on("click",e=>{ if(splitMode){L.DomEvent.stop(e); addSplitAt(e.latlng);} else selectSeg(i); });
         segLayers.push(pl);
       }
@@ -1382,17 +1434,18 @@ function drawSegs(){
       segLayers.push(mk([g[0].lat,g[0].lon],"start","S","Start · direction of travel"));
       segLayers.push(mk([g[g.length-1].lat,g[g.length-1].lon],"fin","F","Finish"));
     }
-    (s.splits||[]).forEach((c,ci)=>{
+    orderedCuts(s).forEach(c=>{
       const mk=L.circleMarker([c.lat,c.lon],{radius:7,color:"#16201b",weight:2,
         fillColor:"#fff",fillOpacity:1}).addTo(map)
-        .bindTooltip("split — click to remove",{className:"seg-tip"});
+        .bindTooltip("course cut — click to remove (affects all segments)",{className:"seg-tip"});
       mk.on("click",ev=>{L.DomEvent.stop(ev);
-        s.splits.splice(ci,1); reindexSubNames(s); drawSegs(); renderSegPane(); save();});
+        const gi=CUTS.findIndex(x=>x===c||hav(x,c)<1);
+        if(gi>=0)CUTS.splice(gi,1);
+        drawSegs(); renderSegPane(); save();});
       splitMarkers.push(mk);
     });
   }
 }
-function reindexSubNames(s){ s.subNames={}; } // names are positional; reset on structural change
 
 function addSplitAt(latlng){
   if(SEL<0) return;
@@ -1400,9 +1453,9 @@ function addSplitAt(latlng){
   const gi=nearestIdx(s.geom,click), gp=s.geom[gi];
   if(hav(gp,click)>60){ toast("Tap on the highlighted trail"); return; }
   // avoid near-duplicate
-  if((s.splits||[]).some(c=>hav(c,gp)<15)){ toast("Already a split there"); return; }
-  s.splits=s.splits||[]; s.splits.push({lat:gp.lat,lon:gp.lon});
-  reindexSubNames(s); drawSegs(); renderSegPane(); save();
+  if(CUTS.some(c=>hav(c,gp)<15)){ toast("Already a cut there"); return; }
+  CUTS.push({lat:gp.lat,lon:gp.lon});   // course cut: applies to every segment on this ground
+  drawSegs(); renderSegPane(); save();
 }
 // map background tap (when the tap misses the line) also drops a split in split mode
 function onMapClick(e){
@@ -1456,7 +1509,8 @@ function renderSegPane(){
   const areas=Object.keys(byArea).sort(), multi=areas.length>1;
   const renderCard=(i)=>{
     const s=SEGS[i], best=s.timed?s.efforts[0]:null;
-    const subTag=(s.splits&&s.splits.length)?`<span class="tag">${s.splits.length+1} parts</span>`:"";
+    const nCuts=orderedCuts(s).length;
+    const subTag=nCuts?`<span class="tag">${nCuts+1} parts</span>`:"";
     const varTag=s.variant?`<span class="tag" title="a shorter line of a longer segment, ridden on its own">↳ shorter line</span>`:"";
     const d=document.createElement("div");d.className="seg"+(i===SEL?" active":"");
     d.innerHTML=`<div class="top"><span class="name">${escapeHtml(s.name)}</span>
@@ -1574,7 +1628,7 @@ function splitDeltaStrip(s){
     <div class="pd-row">${cells}</div></div>`;
 }
 function renderDetail(el,s){
-  const hasSplits=s.splits&&s.splits.length>0;
+  const hasSplits=orderedCuts(s).length>0;
   const prog=progressSummary(s.efforts,s.timed);
   let body;
   if(hasSplits){
@@ -1598,11 +1652,11 @@ function renderDetail(el,s){
         ${s.partials?`<span title="rides that only covered part of this segment are not ranked">${s.partials} partial pass${s.partials>1?"es":""} excluded</span>`:""}</div>
     </div>
     <div class="toolbar">
-      <span class="tbtn ${splitMode?"on":""}" id="splitBtn">✂ ${splitMode?"Splitting — click trail":"Split into sub-segments"}</span>
-      ${hasSplits?`<span class="tbtn" id="clearSplits">Clear splits</span>`:""}
+      <span class="tbtn ${splitMode?"on":""}" id="splitBtn">✂ ${splitMode?"Cutting — click trail":"Cut into parts"}</span>
+      ${hasSplits?`<span class="tbtn" id="clearSplits">Clear cuts here</span>`:""}
       <span class="tbtn" id="backBtn">← All</span>
     </div>
-    ${splitMode?`<div class="banner">Click on the highlighted trail to drop a cut. Click a white dot to remove it.</div>`:""}
+    ${splitMode?`<div class="banner">Click the highlighted trail to drop a cut — cuts apply to every segment on that ground. Click a white dot to remove one.</div>`:""}
     ${body}</div>`;
 
   $("segName").oninput=ev=>{s.name=ev.target.value||s.name;};
@@ -1615,10 +1669,13 @@ function renderDetail(el,s){
     renderDetail(el,s);drawSegs();
     if(splitMode&&isMobile()){setTab("map");toast("Tap the trail to add a cut");}};
   $("backBtn").onclick=()=>{SEL=-1;splitMode=false;drawSegs();renderSegPane();};
-  const cs=$("clearSplits"); if(cs)cs.onclick=()=>{s.splits=[];s.subNames={};
+  const cs=$("clearSplits"); if(cs)cs.onclick=()=>{
+    // remove course cuts that lie on THIS segment's ground (other trails keep theirs)
+    const mine=new Set(orderedCuts(s));
+    CUTS=CUTS.filter(c=>!mine.has(c));
     splitMode=false;drawSegs();renderDetail(el,s);save();};
   el.querySelectorAll(".sname").forEach(inp=>{
-    inp.oninput=()=>{s.subNames=s.subNames||{};s.subNames[+inp.dataset.k]=inp.value;};
+    inp.oninput=()=>{setPartName(s,+inp.dataset.k,inp.value);};
     inp.onblur=()=>{drawSegs();save();};
   });
 }

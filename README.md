@@ -20,8 +20,12 @@ browser from a single `index.html`.
   deltas to the best time and per-effort speed.
 - **Ride stats.** Distance, elapsed/moving time, vertical gain/loss, average and
   max speed, and an elevation profile for each ride.
-- **Sub-segments.** Split any segment at points you click on the map; each part
-  gets its own ranking, plus a "latest run, part by part vs your best" breakdown.
+- **Course cuts.** Drop cut points on the trail once (at junctions — top of the
+  climb, trail forks, …); every segment on that ground parts at the same cuts,
+  each part gets its own ranking and a ground-anchored name (the same stretch
+  carries the same name on every segment, with climb and descent of an
+  out-and-back kept distinct), plus a "latest run, part by part vs your best"
+  breakdown.
 - **Organize.** Rides carry editable tags and dates; filter the Rides tab by
   rider, tag, or name search. Segments group by area (Tahoe, Bay Area, …).
 - **Excluded areas.** Mark ground that should never count toward segments or
@@ -56,10 +60,12 @@ the repo.
    elevation profile and start/finish pins on the map. Click a ride's name to
    see full ride stats. Re-running detection preserves any segments you've
    renamed or split.
-4. **Split (optional).** Inside a segment, choose **Split into sub-segments** and
-   click the highlighted trail to drop cuts. Click a white dot to remove a cut.
-   Each part is ranked separately. Rename segments or parts by typing in their
-   title fields.
+4. **Cut the course (optional).** Inside a segment, choose **Cut into parts** and
+   click the trail to drop cuts at junctions. Click a white dot to remove a cut.
+   Cuts are shared: every segment covering that ground parts at the same points,
+   and part names carry across segments. Each part is ranked separately. Rename
+   segments or parts by typing in their title fields. Excluded areas and ride
+   totals are independent — rides always show their full distance and time.
 5. **Switch units.** Toggle **Metric / Imperial** in the top bar at any time.
 6. **Share (optional).** See [Syncing](#syncing-with-the-repo-optional) below.
 
