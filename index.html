@@ -381,6 +381,21 @@
     </div>
     <button class="run-btn" id="runBtn" disabled>Detect segments</button>
 
+    <div class="sec-label">Excluded areas <span class="n" id="zoneCount">0</span></div>
+    <div class="sync">
+      <div class="syncbtns">
+        <button class="tbtn" id="zoneBtn">🚫 Edit areas</button>
+        <select id="zoneRadius" class="tin" style="flex:1;margin:0">
+          <option value="150">150 m</option>
+          <option value="300" selected>300 m</option>
+          <option value="600">600 m</option>
+          <option value="1200">1.2 km</option>
+        </select>
+      </div>
+      <div class="hint">Ground here never counts toward segments or times — e.g. the ride from
+        home to the trailhead. In edit mode, tap the map to add an area; tap an area to remove it.</div>
+    </div>
+
     <div class="sec-label">Backup <span class="n">☁</span></div>
     <div class="sync">
       <div id="backupState" class="backup-state"></div>
@@ -454,6 +469,7 @@ function hav(a,b){
 let ORIGIN=null, MPLON=1;
 function setOrigin(lat,lon){ORIGIN={lat,lon};MPLON=111320*Math.cos(lat*Math.PI/180);}
 function toXY(p){return {x:(p.lon-ORIGIN.lon)*MPLON, y:(p.lat-ORIGIN.lat)*111320};}
+function inZone(p){for(const z of ZONES)if(hav(p,z)<=z.r)return true;return false;}
 
 /* ---------- gpx parse ---------- */
 function parseGPX(text,name){
@@ -493,6 +509,7 @@ function buildGrid(P,cell){
   const g=new Map();
   for(let i=0;i<P.length;i++){
     const xy=toXY(P[i]); P[i]._x=xy.x; P[i]._y=xy.y;
+    if(P[i]._ex) continue;   // excluded-area points never become match candidates
     const k=Math.floor(xy.x/cell)+","+Math.floor(xy.y/cell);
     (g.get(k)||g.set(k,[]).get(k)).push(i);
   }
@@ -516,6 +533,7 @@ function matchPair(A,gridB,B,radius,cell,minLen,step){
   const runs=[]; const maxMiss=Math.max(2,Math.ceil(40/step));
   let cur=null, miss=0;
   for(let i=0;i<A.length;i++){
+    if(A[i]._ex){ if(cur&&++miss>maxMiss){closeRun(cur,A,B,minLen,runs);cur=null;} continue; }
     const cand=neighbors(gridB,B,A[i]._x,A[i]._y,cell,radius);
     let pick=null;
     if(cand.length){
@@ -592,7 +610,9 @@ function mergeIntervals(ivs){
 /* ---------- detection ---------- */
 function detect(rides,opt){
   const {radius,minLen,minRides}=opt, step=12, cell=radius;
-  const R2=rides.map(r=>{const P=resample(r.raw,step);return {...r,P,grid:buildGrid(P,cell)};});
+  const R2=rides.map(r=>{const P=resample(r.raw,step);
+    if(ZONES.length) P.forEach(p=>{if(inZone(p))p._ex=1;});
+    return {...r,P,grid:buildGrid(P,cell)};});
   const perRide=R2.map(()=>[]); const rawPairRuns=[];
   for(let a=0;a<R2.length;a++)for(let b=a+1;b<R2.length;b++){
     // match BOTH directions: walking A follows one monotone chain through B and
@@ -644,9 +664,10 @@ function detect(rides,opt){
       }
       for(const pieces of groups){
         // attempts keep their FULL ground (incl. any spur/detour); fairness comes
-        // from per-level slicing below, not from excising ground up front
+        // from per-level slicing below, not from excising ground up front.
+        // excluded-area points stay out even if interval bridging spanned a zone.
         const pts=[];
-        for(const m of pieces) for(let k=m.i0;k<=m.i1;k++) pts.push(cleanPt(P[k]));
+        for(const m of pieces) for(let k=m.i0;k<=m.i1;k++) if(!P[k]._ex) pts.push(cleanPt(P[k]));
         let dist=0; for(let k=1;k<pts.length;k++) dist+=hav(pts[k-1],pts[k]);
         attempts.push({ride:r,name:rides[r].name,dist,pts,single:pieces.length===1});
       }
@@ -830,6 +851,7 @@ function updateParamLabels(){
   if($("vRadius"))$("vRadius").textContent=fmtShort(+$("pRadius").value);
   if($("vLen"))$("vLen").textContent=fmtShort(+$("pLen").value);
   if($("vRides"))$("vRides").textContent=$("pRides").value;
+  const zr=$("zoneRadius"); if(zr)[...zr.options].forEach(o=>{if(o.value)o.textContent=fmtShort(+o.value);});
 }
 function applyUnits(){
   lsSet("contour:units",UNITS);
@@ -927,6 +949,7 @@ function dataSig(){
   let s="r"+RIDES.length+"s"+SEGS.length;
   RIDES.forEach(r=>{ s+="|"+(r.name||"")+":"+r.raw.length+":"+((r.tags||[]).join(","))+":"+(r.rider||""); });
   SEGS.forEach(g=>{ s+="#"+(g.name||"")+":"+((g.splits||[]).length)+":"+g.efforts.length; });
+  ZONES.forEach(z=>{ s+="z"+z.lat.toFixed(5)+","+z.lon.toFixed(5)+","+z.r; });
   return s;
 }
 let _saveT=null;
@@ -935,6 +958,7 @@ function save(){ clearTimeout(_saveT); _saveT=setTimeout(()=>{
     ({name:r.name,rider:r.rider||"",tags:r.tags||[],raw:packRaw(r.raw)})))); }catch(e){}
   try{ const sp=JSON.stringify(SEGS.map(packSeg));
     if(sp.length<4500000) lsSet("contour:segs",sp); else lsDel("contour:segs"); }catch(e){}
+  try{ lsSet("contour:zones",JSON.stringify(ZONES)); }catch(e){}
   renderBackupState(); scheduleAutoBackup();
 },400); }
 function clearStore(){ lsDel("contour:rides"); lsDel("contour:segs"); }
@@ -942,6 +966,7 @@ function loadLocal(){
   try{const r=lsGet("contour:rides");
     if(r){RIDES=JSON.parse(r).map(o=>({name:o.name,rider:o.rider||"",tags:o.tags||[],raw:unpackRaw(o.raw)}));}}catch(e){}
   try{const s=lsGet("contour:segs"); if(s){SEGS=JSON.parse(s).map(unpackSeg);}}catch(e){}
+  try{const z=lsGet("contour:zones"); if(z){ZONES=JSON.parse(z)||[];}}catch(e){}
 }
 function load(){
   loadLocal();
@@ -953,6 +978,7 @@ function load(){
     renderRides();drawRides();fitAll();$("runBtn").disabled=activeRideCount()<2; }
   else renderRides();
   if(SEGS.length){drawSegs();renderSegPane();}
+  drawZones();
   renderBackupState();
   if(!RIDES.length) restoreFromRepo(true);   // fresh device: pull your backup
   if(!lsGet("contour:qs")) openQuickStart();   // first visit: show the guide
@@ -1012,7 +1038,7 @@ async function backupNow(auto){
   try{
     const payload={updated:new Date().toISOString(),
       rides:RIDES.map(r=>({name:r.name,rider:r.rider||"",tags:r.tags||[],raw:packRaw(r.raw)})),
-      segments:SEGS.map(packSeg)};
+      segments:SEGS.map(packSeg),zones:ZONES};
     const ex=await ghGetFile(owner,repo,"data/backup.json",token);
     await ghPutFile(owner,repo,"data/backup.json",payload,
       `Backup ${RIDES.length} rides, ${SEGS.length} segments`,token,ex&&ex.sha);
@@ -1031,6 +1057,7 @@ async function restoreFromRepo(autoOnLoad){
   // preferred: single backup file
   const bk=await fetchJSON("data/backup.json?t="+Date.now());
   if(bk&&Array.isArray(bk.rides)){
+    if(Array.isArray(bk.zones)){ ZONES=bk.zones.filter(x=>x&&isFinite(x.lat)&&isFinite(x.lon)&&x.r>0); drawZones(); }
     applyRestored(
       bk.rides.map(o=>({name:o.name,rider:o.rider||"",tags:o.tags||[],raw:unpackRaw(o.raw)})),
       Array.isArray(bk.segments)?bk.segments.map(unpackSeg):[]);
@@ -1058,6 +1085,7 @@ async function legacyRestore(auto){
 
 /* ---------- state + map ---------- */
 let RIDES=[], SEGS=[], SEL=-1, RSEL=-1, splitMode=false;
+let ZONES=[], zoneMode=false, zoneLayers=[];   // excluded areas: {lat,lon,r}
 let map, rideLayers=[], segLayers=[], splitMarkers=[];
 let KNOWN_RIDERS=[], RIDER_FILTER=null;   // null = show all riders
 let TAG_FILTER=null, TEXT_FILTER="";      // null/"" = no tag/text filter
@@ -1377,7 +1405,39 @@ function addSplitAt(latlng){
   reindexSubNames(s); drawSegs(); renderSegPane(); save();
 }
 // map background tap (when the tap misses the line) also drops a split in split mode
-function onMapClick(e){ if(splitMode&&SEL>=0) addSplitAt(e.latlng); }
+function onMapClick(e){
+  if(zoneMode){ zoneClickAt(e.latlng); return; }
+  if(splitMode&&SEL>=0) addSplitAt(e.latlng);
+}
+
+/* ---------- excluded areas ---------- */
+function drawZones(){
+  zoneLayers.forEach(l=>map.removeLayer(l)); zoneLayers=[];
+  ZONES.forEach((z,zi)=>{
+    const c=L.circle([z.lat,z.lon],{radius:z.r,color:"#C0563E",weight:1.5,dashArray:"5 5",
+      fillColor:"#C0563E",fillOpacity:zoneMode?.18:.08,interactive:zoneMode})
+      .addTo(map).bindTooltip("excluded area"+(zoneMode?" — tap to remove":""),{className:"seg-tip"});
+    if(zoneMode) c.on("click",ev=>{L.DomEvent.stop(ev); removeZone(zi);});
+    zoneLayers.push(c);
+  });
+  const n=$("zoneCount"); if(n)n.textContent=ZONES.length;
+}
+function zonesChanged(){ drawZones(); save(); if(activeRideCount()>=2) autoDetect(new Set()); }
+function zoneClickAt(latlng){
+  const p={lat:latlng.lat,lon:latlng.lng};
+  const hit=ZONES.findIndex(z=>hav(p,z)<=z.r);
+  if(hit>=0){ removeZone(hit); return; }
+  ZONES.push({lat:p.lat,lon:p.lon,r:+($("zoneRadius")&&$("zoneRadius").value||300)});
+  toast("Area excluded"); zonesChanged();
+}
+function removeZone(i){ ZONES.splice(i,1); toast("Excluded area removed"); zonesChanged(); }
+function setExcludedZones(z){ ZONES=Array.isArray(z)?z.filter(x=>x&&isFinite(x.lat)&&isFinite(x.lon)&&x.r>0):[]; zonesChanged(); }
+function toggleZoneMode(){
+  zoneMode=!zoneMode; splitMode=false;
+  const b=$("zoneBtn"); if(b)b.classList.toggle("on",zoneMode);
+  drawZones();
+  if(zoneMode){ if(isMobile())setTab("map"); toast("Tap the map to exclude an area · tap an area to remove it"); }
+}
 
 /* ---------- right panel ---------- */
 function renderSegPane(){
@@ -1550,7 +1610,9 @@ function renderDetail(el,s){
     // defer re-render: rewriting #segList here removes the input mid-blur
     // and throws NotFoundError, skipping the save above
     setTimeout(()=>{if(SEL>=0)renderSegPane();},0);};
-  $("splitBtn").onclick=()=>{splitMode=!splitMode;renderDetail(el,s);drawSegs();
+  $("splitBtn").onclick=()=>{splitMode=!splitMode;
+    if(splitMode&&zoneMode){zoneMode=false;const zb=$("zoneBtn");if(zb)zb.classList.remove("on");drawZones();}
+    renderDetail(el,s);drawSegs();
     if(splitMode&&isMobile()){setTab("map");toast("Tap the trail to add a cut");}};
   $("backBtn").onclick=()=>{SEL=-1;splitMode=false;drawSegs();renderSegPane();};
   const cs=$("clearSplits"); if(cs)cs.onclick=()=>{s.splits=[];s.subNames={};
@@ -1626,6 +1688,7 @@ $("clearBtn").onclick=()=>{RIDES=[];SEGS=[];SEL=-1;RSEL=-1;splitMode=false;ORIGI
   clearStore();toast("Cleared");};
 ["pRadius","pLen","pRides"].forEach(p=>{$(p).oninput=updateParamLabels;});
 $("unitBtn").onclick=toggleUnits;
+$("zoneBtn").onclick=toggleZoneMode;
 
 /* ---------- quick start ---------- */
 function openQuickStart(){ $("qsOverlay").classList.add("show"); }

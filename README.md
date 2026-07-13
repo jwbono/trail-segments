@@ -24,6 +24,10 @@ browser from a single `index.html`.
   gets its own ranking, plus a "latest run, part by part vs your best" breakdown.
 - **Organize.** Rides carry editable tags and dates; filter the Rides tab by
   rider, tag, or name search. Segments group by area (Tahoe, Bay Area, …).
+- **Excluded areas.** Mark ground that should never count toward segments or
+  times — e.g. the ride from home to the trailhead. Tap **Edit areas**, then tap
+  the map to add an exclusion circle (tap a circle to remove it). Detection
+  re-runs automatically, and every segment then starts and ends at real trail.
 - **Clean imports.** Duplicate GPX uploads are detected and skipped, so
   re-uploading the same ride from your phone won't clutter your data.
 - **Metric or imperial.** One toggle converts every distance, speed, and
